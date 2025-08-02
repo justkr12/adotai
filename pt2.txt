@@ -1,0 +1,875 @@
+import os
+import sys
+import shutil
+
+# --- 1. 유저 입력 받기 ---
+def get_user_inputs():
+    print("--- opendiscordbot 프로젝트 생성기 ---")
+    print("이 스크립트는 Discord 봇의 다양한 버전을 생성합니다.")
+    print("생성된 프로젝트 폴더로 이동하여 '.env' 파일을 열어 YOUR_...HERE 로 된 부분들을 반드시 채워주세요.")
+
+    bot_name = input("1. 봇의 이름을 입력하세요 (기본값: opendiscordbot): ").strip() or "opendiscordbot"
+    currency_name = input(f"2. {bot_name}에서 사용할 화폐 단위를 입력하세요 (기본값: 위키원): ").strip() or "위키원"
+
+    print("\n--- 3. 생성할 봇의 런타임 종류 선택 ---")
+    print("1. Python Bot만 생성")
+    print("2. Node.js Bot만 생성")
+    print("3. Python Bot과 Node.js Bot 모두 생성")
+    bot_runtime_choice = input("선택 (1/2/3): ").strip()
+
+    try:
+        bot_runtime_choice = int(bot_runtime_choice)
+        if bot_runtime_choice not in [1, 2, 3]:
+            raise ValueError
+    except ValueError:
+        print("❌ 잘못된 런타임 선택입니다. 스크립트를 종료합니다.")
+        sys.exit(1)
+
+    print("\n--- 4. 생성할 프로젝트 버전 선택 ---")
+    print("1. Version 1: [원본] 웹 대시보드 O (Flask), Anvil API O (이메일 봇, API 서버), 홈페이지, 자동회신 시스템")
+    print("2. Version 2: [대시보드 X] 웹 대시보드 UI 없음, Anvil API O (이메일 봇, API 서버), 봇 소유자 전용 기능 강화")
+    print("3. Version 3: [Anvil API X] 웹 대시보드 UI 없음, Flask API (Wispbyte/SQLite), 봇 소유자 전용 기능 강화")
+    print("4. Version 4: [순수 봇] 웹 대시보드 UI 없음, API 없음, 로컬 SQLite DB, 한 길드 전용, 봇 소유자 전용 기능 강화")
+    version_choice = input("버전 번호를 입력하세요 (1/2/3/4): ").strip()
+
+    try:
+        version_choice = int(version_choice)
+        if version_choice not in [1, 2, 3, 4]:
+            raise ValueError
+    except ValueError:
+        print("❌ 잘못된 버전 선택입니다. 스크립트를 종료합니다.")
+        sys.exit(1)
+    
+    # 🚩 파이썬 버전별 API/이메일 봇/대시보드 활성화 플래그
+    is_dashboard_enabled = (version_choice == 1)
+    is_flask_api_enabled = (version_choice == 1 or version_choice == 2 or version_choice == 3) # V1, V2는 Anvil API, V3는 Flask API (여기서 빌드)
+    is_email_bot_enabled = (version_choice == 1)
+    is_pure_bot_mode = (version_choice == 4)
+
+    return bot_name, currency_name, bot_runtime_choice, version_choice, is_dashboard_enabled, is_flask_api_enabled, is_email_bot_enabled, is_pure_bot_mode
+
+# --- 2.0. .env 파일 템플릿 ---
+def get_env_content(bot_name, currency_name, is_dashboard_enabled, is_flask_api_enabled, is_email_bot_enabled, is_pure_bot_mode):
+    env_content = f"""
+# .env 파일 - {bot_name} 프로젝트 환경 설정
+
+# 봇 토큰 (필수)
+BOT_TOKEN="YOUR_DISCORD_BOT_TOKEN_HERE"
+
+# --- 웹 대시보드 관리자 계정 (V1만 사용) ---
+{"DASHBOARD_ADMIN_USERNAME='sejungim39'" if is_dashboard_enabled else "# DASHBOARD_ADMIN_USERNAME='sejungim39'"}
+{"DASHBOARD_ADMIN_PASSWORD='Ty822pzh9kd5uSeC'" if is_dashboard_enabled else "# DASHBOARD_ADMIN_PASSWORD='Ty822pzh9kd5uSeC'"}
+
+# --- API 서버 URL 설정 (V1, V2, V3 사용) ---
+# 🚩 중요: 버전별로 이 값의 역할이 달라집니다!
+# V1, V2 (Anvil API): Anvil 앱을 웹에 발행(Publish)한 후, App Access의 "HTTPS API endpoint URL" (예: https://your-app-name.anvil.app/_/api/)
+# V3 (Flask API): Wispbyte가 할당한 Flask API 주소 (예: http://luna.wisp.uno:8080)
+# V4 (API 없음): 사용되지 않음 (FLASK_BACKEND_URL=""로 비워두세요)
+{"FLASK_BACKEND_URL='YOUR_API_SERVER_URL_HERE'" if is_flask_api_enabled else "FLASK_BACKEND_URL=''"}
+
+# 🚩 중요: 봇이 Flask/Anvil API로 데이터 보낼 때 사용하는 API 키
+{"BOT_API_KEY='YOUR_SUPER_SECRET_BOT_API_KEY_HERE'" if is_flask_api_enabled else "BOT_API_KEY=''"}
+
+# 🚩 웹 대시보드 JWT 발급/검증용 시크릿 키 (V1만 사용)
+{"SECRET_KEY='YOUR_JWT_SECRET_KEY_HERE'" if is_dashboard_enabled else "# SECRET_KEY='YOUR_JWT_SECRET_KEY_HERE'"}
+
+# --- Discord OAuth2 설정 (V1만 사용) ---
+{"DISCORD_CLIENT_ID='YOUR_DISCORD_CLIENT_ID_HERE'" if is_dashboard_enabled else "# DISCORD_CLIENT_ID='YOUR_DISCORD_CLIENT_ID_HERE'"}
+{"DISCORD_CLIENT_SECRET='YOUR_DISCORD_CLIENT_SECRET_HERE'" if is_dashboard_enabled else "# DISCORD_CLIENT_SECRET='YOUR_DISCORD_CLIENT_SECRET_HERE'"}
+
+# --- MySQL 데이터베이스 설정 (현재 이 버전들은 SQLite를 메인으로 사용하며 MySQL은 필요하지 않음) ---
+# MySQL을 사용하고자 할 경우 관련 Flask API (V3) 코드를 수정해야 합니다.
+# # MYSQL_HOST="YOUR_MYSQL_HOST_HERE"
+# # MYSQL_USER="YOUR_MYSQL_USERNAME_HERE"
+# # MYSQL_PASSWORD="YOUR_MYSQL_PASSWORD_HERE"
+# # MYSQL_DB="YOUR_MYSQL_DATABASE_NAME_HERE"
+
+# --- {BOT_NAME} 이메일 지원 시스템 설정 (V1만 사용) ---
+{"SUPPORT_EMAIL_ADDRESS='support@your_domain.com'" if is_email_bot_enabled else "# SUPPORT_EMAIL_ADDRESS='support@your_domain.com'"}
+{"SUPPORT_EMAIL_PASSWORD='your_email_app_password'" if is_email_bot_enabled else "# SUPPORT_EMAIL_PASSWORD='your_email_app_password'"}
+
+{"IMAP_SERVER='imap.your_domain.com'" if is_email_bot_enabled else "# IMAP_SERVER='imap.your_domain.com'"}
+{"IMAP_PORT=993" if is_email_bot_enabled else "# IMAP_PORT=993"}
+{"SMTP_SERVER='smtp.your_domain.com'" if is_email_bot_enabled else "# SMTP_SERVER='smtp.your_domain.com'"}
+{"SMTP_PORT=587" if is_email_bot_enabled else "# SMTP_PORT=587"}
+
+# --- YouTube Data API v3 설정 (V1, V2, V3만 사용) ---
+{"YOUTUBE_API_KEY='YOUR_YOUTUBE_API_KEY_HERE'" if is_flask_api_enabled else "YOUTUBE_API_KEY=''"}
+
+# --- 봇 소유자 ID (특정 명령어 사용 권한 부여용) ---
+# 🚩 이 ID를 통해 '봇 소유자 전용' 명령어를 사용할 수 있습니다.
+BOT_OWNER_ID="YOUR_BOT_OWNER_DISCORD_USER_ID_HERE"
+
+# --- V4 (순수 봇) 전용 설정 ---
+# V4 선택 시, 봇을 특정 길드에만 슬래시 커맨드를 동기화할 경우 해당 길드 ID (정수형)
+TARGET_GUILD_ID=0 # 예: 123456789012345678 (정수형)
+
+# --- 🚩 내부 플래그 (자동 생성 - 수동 변경 금지) ---
+IS_PURE_BOT_MODE={str(is_pure_bot_mode).lower()}
+IS_FLASK_API_ENABLED={str(is_flask_api_enabled).lower()}
+IS_EMAIL_BOT_ENABLED={str(is_email_bot_enabled).lower()}
+IS_DASHBOARD_ENABLED={str(is_dashboard_enabled).lower()}
+"""
+    return env_content
+
+# 5.2. requirements.txt (파이썬 봇용)
+def get_python_requirements_content(is_flask_api_enabled):
+    requirements_content = f"""
+discord.py==2.3.2
+python-dotenv==1.0.1
+PyNaCl==1.5.0
+requests==2.32.3
+yt-dlp==2025.6.30
+google-api-python-client==2.133.0
+python-dateutil==2.8.2
+
+# 🚩 API 서버 사용 시 (V1, V2, V3) 필요한 라이브러리
+"""
+    if is_flask_api_enabled: # Flask API가 활성화된 버전에서만 필요
+        requirements_content += """
+Flask==3.1.1
+PyJWT==2.8.0
+Flask-CORS==4.0.1
+mysql-connector-python==8.4.0 # SQLite 대신 MySQL 사용할 경우 필요
+"""
+    return requirements_content
+
+# 5.3. JUSTBOT.py (파이썬 봇용 런처 스크립트)
+def get_justbot_py_content(bot_name):
+    return f"""
+import subprocess
+import time
+import os
+import sys
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# --- 실행할 스크립트 경로 (프로젝트 루트 기준) ---
+DISCORD_BOT_SCRIPT = "bot.py"
+# 🚩 Flask API 서버는 V3에서만 이 환경에서 실행됩니다.
+FLASK_API_MODULE_PATH = "justbot_api.app"
+EMAIL_SUPPORT_SCRIPT = "email_support_bot.py"
+
+
+# --- 로그 파일 생성 폴더 ---
+LOG_DIR = "logs"
+if not os.path.exists(LOG_DIR):
+    os.makedirs(LOG_DIR)
+
+def start_background_process(name, script_path_or_module_name, python_executable="python3.11", is_module=False):
+    """
+    Python 스크립트 또는 모듈을 백그라운드 프로세스로 시작하고
+    표준 출력/에러를 지정된 로그 파일로 리다이렉트합니다.
+    """
+    stdout_log_path = os.path.join(LOG_DIR, f"{{name}}_stdout.log")
+    stderr_log_path = os.path.join(LOG_DIR, f"{{name}}_stderr.log")
+
+    cmd = []
+    if is_module:
+        cmd = [python_executable, "-m", script_path_or_module_name]
+    else:
+        cmd = [python_executable, script_path_or_module_name]
+
+    try:
+        process = subprocess.Popen(
+            cmd,
+            stdout=open(stdout_log_path, "a", buffering=1),
+            stderr=open(stderr_log_path, "a", buffering=1),
+            text=True,
+            bufsize=1,
+            cwd=os.path.dirname(os.path.abspath(__file__))
+        )
+        print(f"🚀 {{name}} 시작 요청: PID={{process.pid}}. 로그: {{stdout_log_path}}, {{stderr_log_path}}")
+        return process
+    except FileNotFoundError:
+        print(f"❌ 오류: '{{python_executable}}' 또는 '{{script_path_or_module_name}}'을(를) 찾을 수 없습니다.")
+        return None
+    except Exception as e:
+        print(f"❌ {{name}} 실행 중 예외 발생: {{e}}")
+        return None
+
+if __name__ == '__main__':
+    print(f"--- {BOT_NAME} 통합 서비스 실행기 시작 ---")
+    print("⚠️ 봇, API 서버, 이메일 봇 등 필요한 서비스가 백그라운드에서 실행됩니다. 자세한 로그는 'logs/' 디렉토리에서 확인하세요.")
+
+    running_processes = {}
+
+    # 1. 디스코드 봇 시작 (모든 버전에 필수)
+    discord_bot_process = start_background_process("Discord_Bot", DISCORD_BOT_SCRIPT, is_module=False)
+    if discord_bot_process:
+        running_processes["Discord_Bot"] = discord_bot_process
+
+    # 2. Flask API 서버 시작 (V3에서만 이 환경에서 실행)
+    if os.getenv("IS_FLASK_API_ENABLED") == "true":
+        flask_api_process = start_background_process("Flask_API", FLASK_API_MODULE_PATH, is_module=True)
+        if flask_api_process:
+            running_processes["Flask_API"] = flask_api_process
+
+    # 3. 이메일 지원 봇 시작 (V1만)
+    if os.getenv("IS_EMAIL_BOT_ENABLED") == "true":
+        email_bot_process = start_background_process("Email_Support_Bot", EMAIL_SUPPORT_SCRIPT, is_module=False)
+        if email_bot_process:
+            running_processes["Email_Support_Bot"] = email_bot_process
+
+
+    if not running_processes:
+        print("❌ 실행할 서비스가 없습니다. 스크립트 종료.")
+        sys.exit(1)
+
+    print(f"\n--- {BOT_NAME} 통합 서비스 시작 요청 완료 ---")
+    print("이제 모든 서비스가 백그라운드에서 실행됩니다. 이 실행기 프로세스는 계속 실행됩니다.")
+    print("Ctrl+C를 눌러 모든 서비스를 안전하게 종료할 수 있습니다.")
+
+    try:
+        while True:
+            for name, proc in list(running_processes.items()):
+                if proc.poll() is not None:
+                    print(f"🚨 {{name}} (PID={{proc.pid}})가 예상치 못하게 종료되었습니다. 종료 코드: {{proc.poll()}}")
+                    running_processes.pop(name)
+
+            if not running_processes:
+                print("⚠️ 관리 중인 모든 서비스가 종료되었습니다. 실행기를 종료합니다.")
+                break
+
+            time.sleep(10)
+
+    except KeyboardInterrupt:
+        print("\\nCtrl+C 감지. 모든 서비스를 종료합니다.")
+    except Exception as e:
+        print(f"❌ 실행기 메인 루프에서 예외 발생: {{e}}")
+    finally:
+        print("모든 서비스 종료 중...")
+        for name, proc in running_processes.items():
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                    print(f"✅ {{name}} 종료 완료.")
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    print(f"🚨 {{name}} 강제 종료 (SIGKILL).")
+        print(f"모든 {BOT_NAME} 서비스가 종료되었습니다.")
+"""
+
+# 2.4. bot.py (Discord 봇 코어)
+def get_bot_py_content(bot_name, currency_name):
+    return f"""
+import discord
+from discord.ext import commands, tasks
+import os
+from dotenv import load_dotenv
+import sqlite3
+import datetime
+import requests # HTTP 요청용 (API와 통신)
+
+from googleapiclient.discovery import build # Youtube API client (V1, V2, V3 사용)
+
+from discord import app_commands
+
+load_dotenv()
+
+# --- SQLite 설정 (봇 자체 데이터 및 설정 관리) ---
+# 🚩 모든 버전 공용 DB
+DB_FILE = "rp_server_data.db"
+
+def get_db_connection():
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+# 데이터베이스 초기화 (모든 봇의 테이블 생성)
+def initialize_db():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+
+    # 공통 테이블: 봇 상태
+    cursor.execute(\"\"\"
+        CREATE TABLE IF NOT EXISTS bot_status (
+            bot_name TEXT PRIMARY KEY,
+            last_heartbeat TEXT NOT NULL,
+            status TEXT NOT NULL,
+            message TEXT NOT NULL,
+            guild_count INTEGER NOT NULL
+        )
+    \"\"\")
+    # 공통 테이블: 서버별 설정
+    cursor.execute(\"\"\"
+        CREATE TABLE IF NOT EXISTS server_configs (
+            guild_id TEXT PRIMARY KEY,
+            guild_name TEXT,
+            welcome_message_enabled INTEGER DEFAULT 0,
+            welcome_message_text TEXT,
+            leave_message_enabled INTEGER DEFAULT 0,
+            leave_message_text TEXT,
+            log_channel_id TEXT,
+
+            car_registration_tax INTEGER DEFAULT 50000,
+            car_forbidden_cars_json TEXT DEFAULT '[\"탱크\", \"전투기\", \"핵잠수함\", \"우주선\"]',
+            registration_channel_id TEXT,
+            car_admin_channel_id TEXT,
+            car_admin_role_id TEXT,
+            approved_cars_channel_id TEXT,
+
+            bank_loan_enabled INTEGER DEFAULT 1,
+            bank_max_loan_amount INTEGER DEFAULT 1000000,
+            bank_loan_interest_rate REAL DEFAULT 0.032,
+            bank_channel_id TEXT,
+
+            auto_kick_warn_count INTEGER DEFAULT 5,
+            mute_role_id TEXT,
+
+            ticket_open_channel_id TEXT,
+            ticket_category_id TEXT,
+            ticket_staff_role_id TEXT,
+
+            invite_filter_enabled INTEGER DEFAULT 0,
+            spam_filter_enabled INTEGER DEFAULT 0,
+            spam_threshold INTEGER DEFAULT 5,
+            spam_time_window INTEGER DEFAULT 10,
+
+            youtube_activity_enabled INTEGER DEFAULT 0,
+            youtube_channel_ids_json TEXT DEFAULT '[]',
+            youtube_notification_channel_id TEXT
+        )
+    \"\"\")
+    # 컬럼 추가 (try-except로 변경)
+    try:
+        cursor.execute("ALTER TABLE server_configs ADD COLUMN guild_name TEXT")
+    except sqlite3.OperationalError: pass
+    try:
+        cursor.execute("ALTER TABLE server_configs ADD COLUMN invite_filter_enabled INTEGER DEFAULT 0")
+    except sqlite3.OperationalError: pass
+    try:
+        cursor.execute("ALTER TABLE server_configs ADD COLUMN spam_filter_enabled INTEGER DEFAULT 0")
+    except sqlite3.OperationalError: pass
+    try:
+        cursor.execute("ALTER TABLE server_configs ADD COLUMN spam_threshold INTEGER DEFAULT 5")
+    except sqlite3.OperationalError: pass
+    try:
+        cursor.execute("ALTER TABLE server_configs ADD COLUMN spam_time_window INTEGER DEFAULT 10")
+    except sqlite3.OperationalError: pass
+    try:
+        cursor.execute("ALTER TABLE server_configs ADD COLUMN bank_channel_id TEXT")
+    except sqlite3.OperationalError: pass
+    try:
+        cursor.execute("ALTER TABLE server_configs ADD COLUMN youtube_activity_enabled INTEGER DEFAULT 0")
+    except sqlite3.OperationalError: pass
+    try:
+        cursor.execute("ALTER TABLE server_configs ADD COLUMN youtube_channel_ids_json TEXT DEFAULT '[]'")
+    except sqlite3.OperationalError: pass
+    try:
+        cursor.execute("ALTER TABLE server_configs ADD COLUMN youtube_notification_channel_id TEXT")
+    except sqlite3.OperationalError: pass
+
+    # 새로운 공통 테이블: 서버별 커맨드 활성화/비활성화 상태
+    cursor.execute(\"\"\"
+        CREATE TABLE IF NOT EXISTS server_command_states (
+            guild_id TEXT NOT NULL,
+            command_name TEXT NOT NULL,
+            is_enabled INTEGER NOT NULL DEFAULT 1,
+            PRIMARY KEY (guild_id, command_name)
+        )
+    \"\"\")
+    # 새로운 공통 테이블: 봇 현재 상태 및 활동 (봇 소유자용)
+    cursor.execute(\"\"\"
+        CREATE TABLE IF NOT EXISTS bot_presence_settings (
+            id INTEGER PRIMARY KEY DEFAULT 1,
+            status TEXT DEFAULT 'online',
+            activity_type TEXT DEFAULT 'playing',
+            activity_name TEXT DEFAULT 'RP 서버 운영'
+        )
+    \"\"\")
+    cursor.execute("INSERT OR IGNORE INTO bot_presence_settings (id, status, activity_type, activity_name) VALUES (1, 'online', 'playing', 'RP 서버 운영')")
+
+    # 은행 계좌 테이블
+    cursor.execute(\"\"\"
+        CREATE TABLE IF NOT EXISTS bank_accounts (
+            user_id TEXT PRIMARY KEY,
+            username TEXT NOT NULL,
+            balance INTEGER NOT NULL DEFAULT 0
+        )
+    \"\"\")
+    # 은행 거래 내역 테이블
+    cursor.execute(\"\"\"
+        CREATE TABLE IF NOT EXISTS bank_transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            username TEXT NOT NULL,
+            type TEXT NOT NULL,
+            amount INTEGER NOT NULL,
+            timestamp TEXT NOT NULL,
+            related_user_id TEXT,
+            related_username TEXT,
+            description TEXT
+        )
+    \"\"\")
+    # 차량 등록 테이블
+    cursor.execute(\"\"\"
+        CREATE TABLE IF NOT EXISTS car_registrations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            username TEXT NOT NULL,
+            car_name TEXT NOT NULL,
+            registration_tax INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            requested_at TEXT NOT NULL,
+            guild_id TEXT,
+            channel_id TEXT,
+            approved_by TEXT,
+            approved_at TEXT,
+            rejected_by TEXT,
+            rejected_at TEXT,
+            rejection_reason TEXT,
+            timed_out_at TEXT
+        )
+    \"\"\")
+    # 사용자 경고 테이블
+    cursor.execute(\"\"\"
+        CREATE TABLE IF NOT EXISTS user_warnings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            username TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            moderator_id TEXT NOT NULL,
+            moderator_name TEXT NOT NULL,
+            timestamp TEXT NOT NULL
+        )
+    \"\"\")
+    # 게임 통계 테이블
+    cursor.execute(\"\"\"
+        CREATE TABLE IF NOT EXISTS game_stats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            game_type TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            username TEXT NOT NULL,
+            sides INTEGER,
+            result TEXT,
+            user_choice TEXT,
+            bot_choice TEXT,
+            timestamp TEXT NOT NULL
+        )
+    \"\"\")
+    # 티켓 테이블
+    cursor.execute(\"\"\"
+        CREATE TABLE IF NOT EXISTS tickets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            username TEXT NOT NULL,
+            guild_id TEXT NOT NULL,
+            channel_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            reason TEXT,
+            opened_at TEXT NOT NULL,
+            closed_at TEXT,
+            closed_by TEXT
+        )
+    \"\"\")
+    # 대출 테이블
+    cursor.execute(\"\"\"
+        CREATE TABLE IF NOT EXISTS loans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            username TEXT NOT NULL,
+            loan_amount INTEGER NOT NULL,
+            interest_rate REAL NOT NULL,
+            total_repay_amount INTEGER NOT NULL,
+            paid_amount INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL,
+            loan_date TEXT NOT NULL,
+            due_date TEXT
+        )
+    \"\"\")
+    # 대출 상환 내역 테이블
+    cursor.execute(\"\"\"
+        CREATE TABLE IF NOT EXISTS loan_payments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            loan_id INTEGER NOT NULL,
+            user_id TEXT NOT NULL,
+            payment_amount INTEGER NOT NULL,
+            payment_date TEXT NOT NULL,
+            FOREIGN KEY (loan_id) REFERENCES loans(id)
+        )
+    \"\"\")
+
+    # 악성 사용자 블랙리스트 테이블 (개념적인 구현)
+    cursor.execute(\"\"\"
+        CREATE TABLE IF NOT EXISTS global_blacklist (
+            user_id TEXT PRIMARY KEY,
+            username TEXT NOT NULL,
+            reason TEXT,
+            added_by TEXT,
+            added_at TEXT
+        )
+    \"\"\")
+    cursor.execute("INSERT OR IGNORE INTO global_blacklist (user_id, username, reason, added_by, added_at) VALUES ('123456789012345678', '테스트악성유저', '자동화 도배 봇', 'system', datetime('now'))")
+    cursor.execute("INSERT OR IGNORE INTO global_blacklist (user_id, username, reason, added_by, added_at) VALUES ('987654321098765432', '광고용계정', '스팸 광고', 'system', datetime('now'))")
+
+    # 🚩 복구 데이터 테이블 (SQLite)
+    cursor.execute(\"\"\"
+        CREATE TABLE IF NOT EXISTS recovery_data (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id TEXT UNIQUE NOT NULL,
+            snapshot_time TEXT NOT NULL,
+            channels_json TEXT,
+            roles_json TEXT,
+            server_info_json TEXT,
+            members_roles_json TEXT
+        )
+    \"\"\")
+
+    conn.commit()
+    conn.close()
+    print(f"✅ {BOT_NAME}: SQLite 데이터베이스 '{DB_FILE}' 초기화 완료!")
+
+# 서버별 설정 불러오는 헬퍼 함수
+def get_server_config(guild_id):
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM server_configs WHERE guild_id = ?", (str(guild_id),))
+    config = cursor.fetchone()
+    conn.close()
+    return config
+
+# 서버별 설정 업데이트/삽입 헬퍼 함수
+def set_server_config(guild_id, config_name, config_value):
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute(f\"\"\"
+        INSERT INTO server_configs (guild_id, {config_name}) VALUES (?, ?)
+        ON CONFLICT(guild_id) DO UPDATE SET {config_name} = EXCLUDED.{config_name}
+    \"\"\", (str(guild_id), str(config_value)))
+    conn.commit()
+    conn.close()
+
+# 특정 명령어의 활성화 상태를 확인하는 헬퍼 함수
+def is_command_enabled(guild_id: int, command_name: str) -> bool:
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("SELECT is_enabled FROM server_command_states WHERE guild_id = ? AND command_name = ?", (str(guild_id), command_name))
+    result = cursor.fetchone()
+    conn.close()
+    return result[0] == 1 if result else True # 기본적으로 활성화 (설정 없으면 켜진 상태)
+
+# 명령어 활성화 상태를 업데이트하는 헬퍼 함수
+def set_command_enabled_state(guild_id: int, command_name: str, is_enabled: bool):
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    enabled_val = 1 if is_enabled else 0
+    cursor.execute(\"\"\"
+        INSERT INTO server_command_states (guild_id, command_name, is_enabled)
+        VALUES (?, ?, ?)
+        ON CONFLICT(guild_id) DO UPDATE SET is_enabled = EXCLUDED.is_enabled
+    \"\"\", (str(guild_id), command_name, enabled_val))
+    conn.commit()
+    conn.close()
+
+# 봇 상태 및 활동 설정 불러오기
+def get_bot_presence_settings():
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("SELECT status, activity_type, activity_name FROM bot_presence_settings WHERE id = 1")
+    settings = cursor.fetchone()
+    conn.close()
+    return settings if settings else {'status': 'online', 'activity_type': 'playing', 'activity_name': 'RP 서버 운영'} # 기본값
+
+# 봇 상태 및 활동 설정 업데이트
+def set_bot_presence_settings(status, activity_type, activity_name):
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute(\"\"\"
+        INSERT OR REPLACE INTO bot_presence_settings (id, status, activity_type, activity_name)
+        VALUES (1, ?, ?, ?)
+    \"\"\", (status, activity_type, activity_name))
+    conn.commit()
+    conn.close()
+
+initialize_db()
+
+
+intents = discord.Intents.all()
+intents.message_content = True # 메시지 내용 읽기 권한 활성화
+
+# 봇 접두사 변경 (opendiscordbot!) # 🚩 이름 변경
+bot = commands.Bot(command_prefix='저스트 ', intents=intents)
+
+BOT_NAME = "{bot_name}" # 🚩 봇 이름 사용
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+
+# Flask API 서버 URL
+FLASK_BACKEND_URL = os.getenv("FLASK_BACKEND_URL")
+# Flask API 통신 보안 키 (봇->Flask API)
+BOT_API_KEY = os.getenv("BOT_API_KEY")
+
+# YouTube API 키
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
+
+# 봇 소유자 ID
+BOT_OWNER_ID = int(os.getenv("BOT_OWNER_ID", "0"))
+
+# V4 순수 봇용: 대상 길드 ID
+TARGET_GUILD_ID = int(os.getenv("TARGET_GUILD_ID", "0"))
+
+# 🚩 V4 (순수 봇) 모드 플래그 (스크립트가 설정)
+IS_PURE_BOT_MODE = os.getenv("IS_PURE_BOT_MODE") == "true"
+
+
+if not FLASK_BACKEND_URL and not IS_PURE_BOT_MODE: # 🚩 Pure Bot 모드가 아닐 때만 API URL 필수
+    print("❌ Flask_BACKEND_URL이 설정되지 않았습니다. 봇에서 API로 데이터 푸시 기능이 제한됩니다.")
+if not BOT_API_KEY and not IS_PURE_BOT_MODE: # 🚩 Pure Bot 모드가 아닐 때만 API 키 필수
+    print("❌ BOT_API_KEY가 설정되지 않았습니다. 봇에서 API로 데이터 푸시 시 인증에 실패할 수 있습니다.")
+if not YOUTUBE_API_KEY and not IS_PURE_BOT_MODE: # 🚩 Pure Bot 모드에서는 유튜브 API 필요 없음
+    print("❌ YOUTUBE_API_KEY가 설정되지 않았습니다. 유튜브 활동 감지 기능을 사용할 수 없습니다.")
+if not BOT_OWNER_ID: # 🚩 BOT_OWNER_ID로 변경
+    print("⚠️ BOT_OWNER_ID가 설정되지 않았습니다. 봇 소유자 전용 명령어가 제한될 수 있습니다.")
+if IS_PURE_BOT_MODE and not TARGET_GUILD_ID: # 🚩 순수 봇 모드일 때 길드 ID 필수
+    print("❌ 순수 봇 모드는 TARGET_GUILD_ID가 필수입니다. 슬래시 커맨드 동기화가 실패할 수 있습니다.")
+
+
+@tasks.loop(minutes=1)
+async def record_bot_status():
+    status_info = {
+        "bot_name": BOT_NAME,
+        "last_heartbeat": datetime.datetime.now(datetime.UTC).isoformat(),
+        "status": "Online",
+        "message": "정상 작동 중",
+        "guild_count": len(bot.guilds) if bot.guilds else 0
+    }
+
+    # SQLite에 로컬로 저장 (기존 기능 유지)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(\"\"\"
+        INSERT OR REPLACE INTO bot_status (bot_name, last_heartbeat, status, message, guild_count)
+        VALUES (?, ?, ?, ?, ?)
+    \"\"\", (status_info["bot_name"], status_info["last_heartbeat"], status_info["status"], status_info["message"], status_info["guild_count"]))
+    conn.commit()
+    conn.close()
+
+    # 🚩 Flask API로 봇 상태 푸시 (순수 봇 모드에서는 API 호출 안 함)
+    if not IS_PURE_BOT_MODE and FLASK_BACKEND_URL:
+        try:
+            api_endpoint = f"{FLASK_BACKEND_URL}/api/bot_status"
+            headers = {
+                'Content-Type': "application/json",
+                'X-Api-Key': BOT_API_KEY
+            }
+            response = requests.post(api_endpoint, json=status_info, headers=headers)
+            if response.status_code == 200:
+                print(f"✅ 봇 상태 정보 Flask API로 전송 성공: {response.status_code}")
+            else:
+                print(f"❌ 봇 상태 정보 Flask API 전송 실패: {response.status_code} - {response.text}")
+        except requests.exceptions.ConnectionError as e:
+            print(f"❌ 봇 상태 정보 Flask API 연결 오류: {e}")
+        except Exception as e:
+            print(f"❌ 봇 상태 정보 Flask API 전송 중 알 수 없는 오류: {e}")
+
+
+@tasks.loop(minutes=5)
+async def update_bot_presence():
+    settings = get_bot_presence_settings()
+    if not settings: return
+
+    status_map = {
+        'online': discord.Status.online,
+        'idle': discord.Status.idle,
+        'dnd': discord.Status.dnd,
+        'invisible': discord.Status.invisible
+    }
+    activity_type_map = {
+        'playing': discord.ActivityType.playing,
+        'listening': discord.ActivityType.listening,
+        'watching': discord.ActivityType.watching,
+        'streaming': discord.ActivityType.streaming
+    }
+
+    discord_status = status_map.get(settings['status'], discord.Status.online)
+    discord_activity_type = activity_type_map.get(settings['activity_type'], discord.ActivityType.playing)
+
+    activity = discord.Activity(type=discord_activity_type, name=settings['activity_name'])
+
+    await bot.change_presence(status=discord_status, activity=activity)
+    print(f"✅ 봇 상태 업데이트 완료: 상태={settings['status']}, 활동={settings['activity_type']} {settings['activity_name']}")
+
+
+@bot.event
+async def on_ready():
+    print(f'🚀 {bot.user.name} 봇 준비 완료! 모든 기능 야무지게 시작합니다.')
+    try:
+        # 🚩 V4 (순수 봇) 모드일 경우 특정 길드에만 슬래시 커맨드 동기화
+        if IS_PURE_BOT_MODE and TARGET_GUILD_ID:
+            target_guild_obj = bot.get_guild(TARGET_GUILD_ID)
+            if target_guild_obj:
+                await bot.tree.sync(guild=target_guild_obj) # 특정 길드에만 동기화
+                print(f"✅ 슬래시 커맨드 동기화 완료! (대상 길드: {target_guild_obj.name})")
+            else:
+                print(f"❌ 대상 길드 ({TARGET_GUILD_ID})를 찾을 수 없어 슬래시 커맨드 동기화에 실패했습니다.")
+        else: # 그 외 버전은 글로벌 동기화 (V1, V2, V3)
+            await bot.tree.sync() # 글로벌 동기화
+            print(f"✅ 슬래시 커맨드 동기화 완료! (글로벌)")
+    except Exception as e:
+        print(f"❌ 슬래시 커맨드 동기화 실패: {e}")
+    record_bot_status.start()
+    update_bot_presence.start()
+
+    # Cogs 로드 시 필요한 함수들을 bot 객체에 직접 할당
+    bot.get_server_config = get_server_config
+    bot.set_server_config = set_server_config
+    bot.get_db_connection = get_db_connection
+    bot.is_command_enabled = is_command_enabled
+    bot.set_command_enabled_state = set_command_enabled_state
+    bot.get_bot_presence_settings = get_bot_presence_settings
+    bot.set_bot_presence_settings = set_bot_presence_settings
+    bot.FLASK_BACKEND_URL = FLASK_BACKEND_URL
+    bot.BOT_API_KEY = BOT_API_KEY
+    bot.BOT_OWNER_ID = BOT_OWNER_ID # 🚩 BOT_OWNER_ID로 변경
+
+    # 🚩 V4 (순수 봇) 모드일 경우 Flask API 함수들을 None으로 설정
+    if IS_PURE_BOT_MODE:
+        bot.send_recovery_snapshot_to_api = None
+        bot.get_recovery_snapshot_from_api = None
+    else:
+        bot.send_recovery_snapshot_to_api = send_recovery_snapshot_to_api
+        bot.get_recovery_snapshot_from_api = get_recovery_snapshot_from_api
+
+    if YOUTUBE_API_KEY and not IS_PURE_BOT_MODE: # 🚩 Pure Bot 모드에서는 유튜브 API 필요 없음
+        try:
+            bot.youtube_service = build('youtube', 'v3', developerKey=YOUTUBE_API_KEY)
+            print("✅ YouTube Data API 서비스 빌드 완료.")
+        except Exception as e:
+            print(f"❌ YouTube Data API 서비스 빌드 실패: {e}")
+            bot.youtube_service = None
+    else:
+        bot.youtube_service = None
+
+
+    cogs_to_load = [
+        "cogs.bank",
+        "cogs.car",
+        "cogs.moderation",
+        "cogs.music",
+        "cogs.game",
+        "cogs.youtube_tracker"
+    ]
+    for cog in cogs_to_load:
+        # 🚩 V4 (순수 봇) 모드에서는 youtube_tracker 로드하지 않음 (API 서버 없으므로)
+        if IS_PURE_BOT_MODE and cog == "cogs.youtube_tracker":
+            print("⚠️ 순수 봇 모드에서는 youtube_tracker 코그를 로드하지 않습니다.")
+            continue
+        try:
+            await bot.load_extension(cog)
+            print(f"로드 성공: {cog}")
+        except Exception as e:
+            print(f"로드 실패: {cog} - {e}")
+
+    # 봇이 켜질 때 guild_name이 없는 server_configs 항목을 채워 넣기
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT guild_id FROM server_configs WHERE guild_name IS NULL")
+    guild_ids_without_name = cursor.fetchall()
+
+    for guild_row in guild_ids_without_name:
+        guild_id = int(guild_row['guild_id'])
+        guild = bot.get_guild(guild_id)
+        if guild:
+            cursor.execute("UPDATE server_configs SET guild_name = ? WHERE guild_id = ?", (guild.name, str(guild_id)))
+            print(f"✅ 서버 ID {guild_id}의 이름 '{guild.name}'을(를) DB에 업데이트했습니다.")
+        else:
+            print(f"⚠️ 봇이 길드 {guild_id}에 접근할 수 없습니다. 길드가 존재하지 않거나 봇이 서버에 없습니다.")
+    conn.commit()
+    conn.close()
+
+
+@bot.event
+async def on_message(message):
+    if message.author == bot.user or not message.guild:
+        return
+
+    await bot.process_commands(message)
+
+
+@bot.event
+async def on_member_join(member: discord.Member):
+    """멤버가 서버에 가입할 때 실행됩니다."""
+    if member.bot: return
+    guild = member.guild
+    config = get_server_config(guild.id)
+
+    if config and config.get('welcome_message_enabled', 0):
+        channel_id = config.get('log_channel_id')
+        if not channel_id: return
+
+        channel = bot.get_channel(int(channel_id))
+        if channel:
+            message_text = config.get('welcome_message_text', "어서오세요, {user}님!")
+            message_text = message_text.replace("{user}", member.mention)
+            message_text = message_text.replace("{server}", guild.name)
+            message_text = message_text.replace("{member_count}", str(guild.member_count))
+            try:
+                await channel.send(message_text)
+            except discord.Forbidden:
+                print(f"❌ 채널 {channel.name}에 메시지를 보낼 권한이 없습니다.")
+
+@bot.event
+async def on_member_remove(member: discord.Member):
+    """멤버가 서버를 떠날 때 실행됩니다."""
+    if member.bot: return
+    guild = member.guild
+    config = get_server_config(guild.id)
+
+    if config and config.get('leave_message_enabled', 0):
+        channel_id = config.get('log_channel_id')
+        if not channel_id: return
+
+        channel = bot.get_channel(int(channel_id))
+        if channel:
+            message_text = config.get('leave_message_text', "안녕히가세요, {user}님.")
+            message_text = message_text.replace("{user}", member.display_name)
+            message_text = message_text.replace("{server}", guild.name)
+            message_text = message_text.replace("{member_count}", str(guild.member_count))
+            try:
+                await channel.send(message_text)
+            except discord.Forbidden:
+                print(f"❌ 채널 {channel.name}에 메시지를 보낼 권한이 없습니다.")
+
+
+@bot.event
+async def on_interaction(interaction: discord.Interaction):
+    if interaction.type == discord.InteractionType.application_command and interaction.guild:
+        command_name_parts = [interaction.command.name]
+        if interaction.command.parent:
+            command_name_parts.insert(0, interaction.command.parent.name)
+            if interaction.command.parent.parent:
+                command_name_parts.insert(0, interaction.command.parent.parent.name)
+        full_command_name = " ".join(command_name_parts)
+
+        if not is_command_enabled(interaction.guild.id, full_command_name):
+            await interaction.response.send_message(f"❌ 이 명령어 (`/{full_command_name}`)는 현재 이 서버에서 비활성화되어 있습니다。", ephemeral=True)
+            return
+    
+    await bot.process_commands(interaction)
+
+
+@bot.event
+async def on_app_command_error_global(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    if interaction.response.is_done():
+        print(f"오류 발생 (이미 응답 전송됨): {error}")
+        return
+
+    if isinstance(error, app_commands.CommandInvokeError):
+        print(f"전역 오류 발생: {error.original}")
+        await interaction.response.send_message(f"오류가 발생했습니다: {error.original}", ephemeral=True)
+
+    elif isinstance(error, app_commands.MissingPermissions):
+        await interaction.response.send_message("❌ 이 명령어를 사용할 권한이 없습니다. 관리자(Administrator) 권한이 필요합니다。", ephemeral=True)
+    elif isinstance(error, app_commands.CommandOnCooldown):
+        await interaction.response.send_message(f"❌ 이 명령어는 쿨타임 중입니다. {error.retry_after:.2f}초 후에 다시 시도해주세요。", ephemeral=True)
+    else:
+        print(f"알 수 없는 전역 오류: {error}")
+        await interaction.response.send_message(f"알 수 없는 오류가 발생했습니다: {error}", ephemeral=True)

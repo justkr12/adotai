@@ -1,0 +1,2083 @@
+import os
+import sys
+import shutil
+
+# --- 1. 유저 입력 받기 ---
+def get_user_inputs():
+    print("--- opendiscordbot 프로젝트 생성기 ---")
+    print("이 스크립트는 Discord 봇의 다양한 버전을 생성합니다.")
+    print("생성된 프로젝트 폴더로 이동하여 '.env' 파일을 열어 YOUR_...HERE 로 된 부분들을 반드시 채워주세요.")
+
+    bot_name = input("1. 봇의 이름을 입력하세요 (기본값: opendiscordbot): ").strip() or "opendiscordbot"
+    currency_name = input(f"2. {bot_name}에서 사용할 화폐 단위를 입력하세요 (기본값: 위키원): ").strip() or "위키원"
+
+    print("\n--- 3. 생성할 봇의 런타임 종류 선택 ---")
+    print("1. Python Bot만 생성")
+    print("2. Node.js Bot만 생성")
+    print("3. Python Bot과 Node.js Bot 모두 생성")
+    bot_runtime_choice = input("선택 (1/2/3): ").strip()
+
+    try:
+        bot_runtime_choice = int(bot_runtime_choice)
+        if bot_runtime_choice not in [1, 2, 3]:
+            raise ValueError
+    except ValueError:
+        print("❌ 잘못된 런타임 선택입니다. 스크립트를 종료합니다.")
+        sys.exit(1)
+
+    print("\n--- 4. 생성할 프로젝트 버전 선택 ---")
+    print("1. Version 1: [원본] 웹 대시보드 O (Flask), Anvil API O (이메일 봇, API 서버), 홈페이지, 자동회신 시스템")
+    print("2. Version 2: [대시보드 X] 웹 대시보드 UI 없음, Anvil API O (이메일 봇, API 서버), 봇 소유자 전용 기능 강화")
+    print("3. Version 3: [Anvil API X] 웹 대시보드 UI 없음, Flask API (Wispbyte/SQLite), 봇 소유자 전용 기능 강화")
+    print("4. Version 4: [순수 봇] 웹 대시보드 UI 없음, API 없음, 로컬 SQLite DB, 한 길드 전용, 봇 소유자 전용 기능 강화")
+    version_choice = input("버전 번호를 입력하세요 (1/2/3/4): ").strip()
+
+    try:
+        version_choice = int(version_choice)
+        if version_choice not in [1, 2, 3, 4]:
+            raise ValueError
+    except ValueError:
+        print("❌ 잘못된 버전 선택입니다. 스크립트를 종료합니다.")
+        sys.exit(1)
+    
+    # 🚩 파이썬 버전별 API/이메일 봇/대시보드 활성화 플래그
+    is_dashboard_enabled = (version_choice == 1)
+    is_flask_api_enabled = (version_choice == 1 or version_choice == 2 or version_choice == 3) # V1, V2는 Anvil API, V3는 Flask API (여기서 빌드)
+    is_email_bot_enabled = (version_choice == 1)
+    is_pure_bot_mode = (version_choice == 4)
+
+    return bot_name, currency_name, bot_runtime_choice, version_choice, is_dashboard_enabled, is_flask_api_enabled, is_email_bot_enabled, is_pure_bot_mode
+
+# --- 2.0. .env 파일 템플릿 ---
+def get_env_content(bot_name, currency_name, is_dashboard_enabled, is_flask_api_enabled, is_email_bot_enabled, is_pure_bot_mode):
+    env_content = f"""
+# .env 파일 - {bot_name} 프로젝트 환경 설정
+
+# 봇 토큰 (필수)
+BOT_TOKEN="YOUR_DISCORD_BOT_TOKEN_HERE"
+
+# --- 웹 대시보드 관리자 계정 (V1만 사용) ---
+{"DASHBOARD_ADMIN_USERNAME='sejungim39'" if is_dashboard_enabled else "# DASHBOARD_ADMIN_USERNAME='sejungim39'"}
+{"DASHBOARD_ADMIN_PASSWORD='Ty822pzh9kd5uSeC'" if is_dashboard_enabled else "# DASHBOARD_ADMIN_PASSWORD='Ty822pzh9kd5uSeC'"}
+
+# --- API 서버 URL 설정 (V1, V2, V3만 사용) ---
+# 🚩 중요: 버전별로 이 값의 역할이 달라집니다!
+# V1, V2 (Anvil API): Anvil 앱을 웹에 발행(Publish)한 후, App Access의 "HTTPS API endpoint URL" (예: https://your-app-name.anvil.app/_/api/)
+# V3 (Flask API): Wispbyte가 할당한 Flask API 주소 (예: http://luna.wisp.uno:8080)
+# V4 (API 없음): 사용되지 않음 (FLASK_BACKEND_URL=""로 비워두세요)
+{"FLASK_BACKEND_URL='YOUR_API_SERVER_URL_HERE'" if is_flask_api_enabled else "FLASK_BACKEND_URL=''"}
+
+# 🚩 중요: 봇이 Flask/Anvil API로 데이터 보낼 때 사용하는 API 키
+{"BOT_API_KEY='YOUR_SUPER_SECRET_BOT_API_KEY_HERE'" if is_flask_api_enabled else "BOT_API_KEY=''"}
+
+# 🚩 웹 대시보드 JWT 발급/검증용 시크릿 키 (V1만 사용)
+{"SECRET_KEY='YOUR_JWT_SECRET_KEY_HERE'" if is_dashboard_enabled else "# SECRET_KEY='YOUR_JWT_SECRET_KEY_HERE'"}
+
+# --- Discord OAuth2 설정 (V1만 사용) ---
+{"DISCORD_CLIENT_ID='YOUR_DISCORD_CLIENT_ID_HERE'" if is_dashboard_enabled else "# DISCORD_CLIENT_ID='YOUR_DISCORD_CLIENT_ID_HERE'"}
+{"DISCORD_CLIENT_SECRET='YOUR_DISCORD_CLIENT_SECRET_HERE'" if is_dashboard_enabled else "# DISCORD_CLIENT_SECRET='YOUR_DISCORD_CLIENT_SECRET_HERE'"}
+
+# --- MySQL 데이터베이스 설정 (현재 이 버전들은 SQLite를 메인으로 사용하며 MySQL은 필요하지 않음) ---
+# MySQL을 사용하고자 할 경우 관련 Flask API (V3) 코드를 수정해야 합니다.
+# # MYSQL_HOST="YOUR_MYSQL_HOST_HERE"
+# # MYSQL_USER="YOUR_MYSQL_USERNAME_HERE"
+# # MYSQL_PASSWORD="YOUR_MYSQL_PASSWORD_HERE"
+# # MYSQL_DB="YOUR_MYSQL_DATABASE_NAME_HERE"
+
+# --- {BOT_NAME} 이메일 지원 시스템 설정 (V1만 사용) ---
+{"SUPPORT_EMAIL_ADDRESS='support@your_domain.com'" if is_email_bot_enabled else "# SUPPORT_EMAIL_ADDRESS='support@your_domain.com'"}
+{"SUPPORT_EMAIL_PASSWORD='your_email_app_password'" if is_email_bot_enabled else "# SUPPORT_EMAIL_PASSWORD='your_email_app_password'"}
+
+{"IMAP_SERVER='imap.gmail.com'" if is_email_bot_enabled else "# IMAP_SERVER='imap.gmail.com'"}
+{"IMAP_PORT=993" if is_email_bot_enabled else "# IMAP_PORT=993"}
+{"SMTP_SERVER='smtp.gmail.com'" if is_email_bot_enabled else "# SMTP_SERVER='smtp.gmail.com'"}
+{"SMTP_PORT=587" if is_email_bot_enabled else "# SMTP_PORT=587"}
+
+# --- YouTube Data API v3 설정 (V1, V2, V3만 사용) ---
+{"YOUTUBE_API_KEY='YOUR_YOUTUBE_API_KEY_HERE'" if is_flask_api_enabled else "YOUTUBE_API_KEY=''"}
+
+# --- 봇 소유자 ID (특정 명령어 사용 권한 부여용) ---
+# 🚩 이 ID를 통해 '봇 소유자 전용' 명령어를 사용할 수 있습니다.
+BOT_OWNER_ID="YOUR_BOT_OWNER_DISCORD_USER_ID_HERE"
+
+# --- V4 (순수 봇) 전용 설정 ---
+# V4 선택 시, 봇을 특정 길드에만 슬래시 커맨드를 동기화할 경우 해당 길드 ID (정수형)
+TARGET_GUILD_ID=0 # 예: 123456789012345678 (정수형)
+
+# --- 🚩 내부 플래그 (자동 생성 - 수동 변경 금지) ---
+IS_PURE_BOT_MODE={str(is_pure_bot_mode).lower()}
+IS_FLASK_API_ENABLED={str(is_flask_api_enabled).lower()}
+IS_EMAIL_BOT_ENABLED={str(is_email_bot_enabled).lower()}
+IS_DASHBOARD_ENABLED={str(is_dashboard_enabled).lower()}
+"""
+    return env_content
+
+# 5.2. requirements.txt (파이썬 봇용)
+def get_python_requirements_content(is_flask_api_enabled):
+    requirements_content = f"""
+discord.py==2.3.2
+python-dotenv==1.0.1
+PyNaCl==1.5.0
+requests==2.32.3
+yt-dlp==2025.6.30
+google-api-python-client==2.133.0
+python-dateutil==2.8.2
+
+# 🚩 API 서버 사용 시 (V1, V2, V3) 필요한 라이브러리
+"""
+    if is_flask_api_enabled: # Flask API가 활성화된 버전에서만 필요
+        requirements_content += """
+Flask==3.1.1
+PyJWT==2.8.0
+Flask-CORS==4.0.1
+mysql-connector-python==8.4.0 # SQLite 대신 MySQL 사용할 경우 필요
+"""
+    return requirements_content
+
+# 5.3. JUSTBOT.py (파이썬 봇용 런처 스크립트)
+def get_justbot_py_content(bot_name):
+    return f"""
+import subprocess
+import time
+import os
+import sys
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# --- 실행할 스크립트 경로 (프로젝트 루트 기준) ---
+DISCORD_BOT_SCRIPT = "bot.py"
+# 🚩 Flask API 서버는 V3에서만 이 환경에서 실행됩니다.
+FLASK_API_MODULE_PATH = "justbot_api.app" # 🚩 Flask API 모듈 경로
+EMAIL_SUPPORT_SCRIPT = "email_support_bot.py" # 🚩 이메일 봇 스크립트 경로
+
+
+# --- 로그 파일 생성 폴더 ---
+LOG_DIR = "logs"
+if not os.path.exists(LOG_DIR):
+    os.makedirs(LOG_DIR)
+
+def start_background_process(name, script_path_or_module_name, python_executable="python3.11", is_module=False):
+    """
+    Python 스크립트 또는 모듈을 백그라운드 프로세스로 시작하고
+    표준 출력/에러를 지정된 로그 파일로 리다이렉트합니다.
+    """
+    stdout_log_path = os.path.join(LOG_DIR, f"{{name}}_stdout.log")
+    stderr_log_path = os.path.join(LOG_DIR, f"{{name}}_stderr.log")
+
+    cmd = []
+    if is_module:
+        cmd = [python_executable, "-m", script_path_or_module_name]
+    else:
+        cmd = [python_executable, script_path_or_module_name]
+
+    try:
+        process = subprocess.Popen(
+            cmd,
+            stdout=open(stdout_log_path, "a", buffering=1),
+            stderr=open(stderr_log_path, "a", buffering=1),
+            text=True,
+            bufsize=1,
+            cwd=os.path.dirname(os.path.abspath(__file__))
+        )
+        print(f"🚀 {{name}} 시작 요청: PID={{process.pid}}. 로그: {{stdout_log_path}}, {{stderr_log_path}}")
+        return process
+    except FileNotFoundError:
+        print(f"❌ 오류: '{{python_executable}}' 또는 '{{script_path_or_module_name}}'을(를) 찾을 수 없습니다.")
+        return None
+    except Exception as e:
+        print(f"❌ {{name}} 실행 중 예외 발생: {{e}}")
+        return None
+
+if __name__ == '__main__':
+    print(f"--- {BOT_NAME} 통합 서비스 실행기 시작 ---")
+    print("⚠️ 봇, API 서버, 이메일 봇 등 필요한 서비스가 백그라운드에서 실행됩니다. 자세한 로그는 'logs/' 디렉토리에서 확인하세요.")
+
+    running_processes = {}
+
+    # 1. 디스코드 봇 시작 (모든 버전에 필수)
+    discord_bot_process = start_background_process("Discord_Bot", DISCORD_BOT_SCRIPT, is_module=False)
+    if discord_bot_process:
+        running_processes["Discord_Bot"] = discord_bot_process
+
+    # 2. Flask API 서버 시작 (V3에서만 이 환경에서 실행)
+    if os.getenv("IS_FLASK_API_ENABLED") == "true":
+        flask_api_process = start_background_process("Flask_API", FLASK_API_MODULE_PATH, is_module=True)
+        if flask_api_process:
+            running_processes["Flask_API"] = flask_api_process
+
+    # 3. 이메일 지원 봇 시작 (V1만)
+    if os.getenv("IS_EMAIL_BOT_ENABLED") == "true":
+        email_bot_process = start_background_process("Email_Support_Bot", EMAIL_SUPPORT_SCRIPT, is_module=False)
+        if email_bot_process:
+            running_processes["Email_Support_Bot"] = email_bot_process
+
+
+    if not running_processes:
+        print("❌ 실행할 서비스가 없습니다. 스크립트 종료.")
+        sys.exit(1)
+
+    print(f"\n--- {BOT_NAME} 통합 서비스 시작 요청 완료 ---")
+    print("이제 모든 서비스가 백그라운드에서 실행됩니다. 이 실행기 프로세스는 계속 실행됩니다.")
+    print("Ctrl+C를 눌러 모든 서비스를 안전하게 종료할 수 있습니다.")
+
+    try:
+        while True:
+            for name, proc in list(running_processes.items()):
+                if proc.poll() is not None:
+                    print(f"🚨 {{name}} (PID={{proc.pid}})가 예상치 못하게 종료되었습니다. 종료 코드: {{proc.poll()}}")
+                    running_processes.pop(name)
+
+            if not running_processes:
+                print("⚠️ 관리 중인 모든 서비스가 종료되었습니다. 실행기를 종료합니다.")
+                break
+
+            time.sleep(10)
+
+    except KeyboardInterrupt:
+        print("\\nCtrl+C 감지. 모든 서비스를 종료합니다.")
+    except Exception as e:
+        print(f"❌ 실행기 메인 루프에서 예외 발생: {{e}}")
+    finally:
+        print("모든 서비스 종료 중...")
+        for name, proc in running_processes.items():
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                    print(f"✅ {{name}} 종료 완료.")
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    print(f"🚨 {{name}} 강제 종료 (SIGKILL).")
+        print(f"모든 {BOT_NAME} 서비스가 종료되었습니다.")
+"""
+
+# 2.4. bot.py (Discord 봇 코어)
+def get_bot_py_content(bot_name, currency_name):
+    return f"""
+import discord
+from discord.ext import commands, tasks
+import os
+from dotenv import load_dotenv
+import sqlite3
+import datetime
+import requests # HTTP 요청용 (API와 통신)
+
+from googleapiclient.discovery import build # Youtube API client (V1, V2, V3 사용)
+
+from discord import app_commands
+
+load_dotenv()
+
+# --- SQLite 설정 (봇 자체 데이터 및 설정 관리) ---
+# 🚩 모든 버전 공용 DB
+DB_FILE = "rp_server_data.db"
+
+def get_db_connection():
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+# 데이터베이스 초기화 (모든 봇의 테이블 생성)
+def initialize_db():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+
+    # 공통 테이블: 봇 상태
+    cursor.execute(\"\"\"
+        CREATE TABLE IF NOT EXISTS bot_status (
+            bot_name TEXT PRIMARY KEY,
+            last_heartbeat TEXT NOT NULL,
+            status TEXT NOT NULL,
+            message TEXT NOT NULL,
+            guild_count INTEGER NOT NULL
+        )
+    \"\"\")
+    # 공통 테이블: 서버별 설정
+    cursor.execute(\"\"\"
+        CREATE TABLE IF NOT EXISTS server_configs (
+            guild_id TEXT PRIMARY KEY,
+            guild_name TEXT,
+            welcome_message_enabled INTEGER DEFAULT 0,
+            welcome_message_text TEXT,
+            leave_message_enabled INTEGER DEFAULT 0,
+            leave_message_text TEXT,
+            log_channel_id TEXT,
+
+            car_registration_tax INTEGER DEFAULT 50000,
+            car_forbidden_cars_json TEXT DEFAULT '[\"탱크\", \"전투기\", \"핵잠수함\", \"우주선\"]',
+            registration_channel_id TEXT,
+            car_admin_channel_id TEXT,
+            car_admin_role_id TEXT,
+            approved_cars_channel_id TEXT,
+
+            bank_loan_enabled INTEGER DEFAULT 1,
+            bank_max_loan_amount INTEGER DEFAULT 1000000,
+            bank_loan_interest_rate REAL DEFAULT 0.032,
+            bank_channel_id TEXT,
+
+            auto_kick_warn_count INTEGER DEFAULT 5,
+            mute_role_id TEXT,
+
+            ticket_open_channel_id TEXT,
+            ticket_category_id TEXT,
+            ticket_staff_role_id TEXT,
+
+            invite_filter_enabled INTEGER DEFAULT 0,
+            spam_filter_enabled INTEGER DEFAULT 0,
+            spam_threshold INTEGER DEFAULT 5,
+            spam_time_window INTEGER DEFAULT 10,
+
+            youtube_activity_enabled INTEGER DEFAULT 0,
+            youtube_channel_ids_json TEXT DEFAULT '[]',
+            youtube_notification_channel_id TEXT
+        )
+    \"\"\")
+    # 컬럼 추가 (try-except로 변경)
+    try:
+        cursor.execute("ALTER TABLE server_configs ADD COLUMN guild_name TEXT")
+    except sqlite3.OperationalError: pass
+    try:
+        cursor.execute("ALTER TABLE server_configs ADD COLUMN invite_filter_enabled INTEGER DEFAULT 0")
+    except sqlite3.OperationalError: pass
+    try:
+        cursor.execute("ALTER TABLE server_configs ADD COLUMN spam_filter_enabled INTEGER DEFAULT 0")
+    except sqlite3.OperationalError: pass
+    try:
+        cursor.execute("ALTER TABLE server_configs ADD COLUMN spam_threshold INTEGER DEFAULT 5")
+    except sqlite3.OperationalError: pass
+    try:
+        cursor.execute("ALTER TABLE server_configs ADD COLUMN spam_time_window INTEGER DEFAULT 10")
+    except sqlite3.OperationalError: pass
+    try:
+        cursor.execute("ALTER TABLE server_configs ADD COLUMN bank_channel_id TEXT")
+    except sqlite3.OperationalError: pass
+    try:
+        cursor.execute("ALTER TABLE server_configs ADD COLUMN youtube_activity_enabled INTEGER DEFAULT 0")
+    except sqlite3.OperationalError: pass
+    try:
+        cursor.execute("ALTER TABLE server_configs ADD COLUMN youtube_channel_ids_json TEXT DEFAULT '[]'")
+    except sqlite3.OperationalError: pass
+    try:
+        cursor.execute("ALTER TABLE server_configs ADD COLUMN youtube_notification_channel_id TEXT")
+    except sqlite3.OperationalError: pass
+
+    # 새로운 공통 테이블: 서버별 커맨드 활성화/비활성화 상태
+    cursor.execute(\"\"\"
+        CREATE TABLE IF NOT EXISTS server_command_states (
+            guild_id TEXT NOT NULL,
+            command_name TEXT NOT NULL,
+            is_enabled INTEGER NOT NULL DEFAULT 1,
+            PRIMARY KEY (guild_id, command_name)
+        )
+    \"\"\")
+    # 새로운 공통 테이블: 봇 현재 상태 및 활동 (봇 소유자용)
+    cursor.execute(\"\"\"
+        CREATE TABLE IF NOT EXISTS bot_presence_settings (
+            id INTEGER PRIMARY KEY DEFAULT 1,
+            status TEXT DEFAULT 'online',
+            activity_type TEXT DEFAULT 'playing',
+            activity_name TEXT DEFAULT 'RP 서버 운영'
+        )
+    \"\"\")
+    cursor.execute("INSERT OR IGNORE INTO bot_presence_settings (id, status, activity_type, activity_name) VALUES (1, 'online', 'playing', 'RP 서버 운영')")
+
+    # 은행 계좌 테이블
+    cursor.execute(\"\"\"
+        CREATE TABLE IF NOT EXISTS bank_accounts (
+            user_id TEXT PRIMARY KEY,
+            username TEXT NOT NULL,
+            balance INTEGER NOT NULL DEFAULT 0
+        )
+    \"\"\")
+    # 은행 거래 내역 테이블
+    cursor.execute(\"\"\"
+        CREATE TABLE IF NOT EXISTS bank_transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            username TEXT NOT NULL,
+            type TEXT NOT NULL,
+            amount INTEGER NOT NULL,
+            timestamp TEXT NOT NULL,
+            related_user_id TEXT,
+            related_username TEXT,
+            description TEXT
+        )
+    \"\"\")
+    # 차량 등록 테이블
+    cursor.execute(\"\"\"
+        CREATE TABLE IF NOT EXISTS car_registrations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            username TEXT NOT NULL,
+            car_name TEXT NOT NULL,
+            registration_tax INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            requested_at TEXT NOT NULL,
+            guild_id TEXT,
+            channel_id TEXT,
+            approved_by TEXT,
+            approved_at TEXT,
+            rejected_by TEXT,
+            rejected_at TEXT,
+            rejection_reason TEXT,
+            timed_out_at TEXT
+        )
+    \"\"\")
+    # 사용자 경고 테이블
+    cursor.execute(\"\"\"
+        CREATE TABLE IF NOT EXISTS user_warnings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            username TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            moderator_id TEXT NOT NULL,
+            moderator_name TEXT NOT NULL,
+            timestamp TEXT NOT NULL
+        )
+    \"\"\")
+    # 게임 통계 테이블
+    cursor.execute(\"\"\"
+        CREATE TABLE IF NOT EXISTS game_stats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            game_type TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            username TEXT NOT NULL,
+            sides INTEGER,
+            result TEXT,
+            user_choice TEXT,
+            bot_choice TEXT,
+            timestamp TEXT NOT NULL
+        )
+    \"\"\")
+    # 티켓 테이블
+    cursor.execute(\"\"\"
+        CREATE TABLE IF NOT EXISTS tickets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            username TEXT NOT NULL,
+            guild_id TEXT NOT NULL,
+            channel_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            reason TEXT,
+            opened_at TEXT NOT NULL,
+            closed_at TEXT,
+            closed_by TEXT
+        )
+    \"\"\")
+    # 대출 테이블
+    cursor.execute(\"\"\"
+        CREATE TABLE IF NOT EXISTS loans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            username TEXT NOT NULL,
+            loan_amount INTEGER NOT NULL,
+            interest_rate REAL NOT NULL,
+            total_repay_amount INTEGER NOT NULL,
+            paid_amount INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL,
+            loan_date TEXT NOT NULL,
+            due_date TEXT
+        )
+    \"\"\")
+    # 대출 상환 내역 테이블
+    cursor.execute(\"\"\"
+        CREATE TABLE IF NOT EXISTS loan_payments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            loan_id INTEGER NOT NULL,
+            user_id TEXT NOT NULL,
+            payment_amount INTEGER NOT NULL,
+            payment_date TEXT NOT NULL,
+            FOREIGN KEY (loan_id) REFERENCES loans(id)
+        )
+    \"\"\")
+
+    # 악성 사용자 블랙리스트 테이블 (개념적인 구현)
+    cursor.execute(\"\"\"
+        CREATE TABLE IF NOT EXISTS global_blacklist (
+            user_id TEXT PRIMARY KEY,
+            username TEXT NOT NULL,
+            reason TEXT,
+            added_by TEXT,
+            added_at TEXT
+        )
+    \"\"\")
+    cursor.execute("INSERT OR IGNORE INTO global_blacklist (user_id, username, reason, added_by, added_at) VALUES ('123456789012345678', '테스트악성유저', '자동화 도배 봇', 'system', datetime('now'))")
+    cursor.execute("INSERT OR IGNORE INTO global_blacklist (user_id, username, reason, added_by, added_at) VALUES ('987654321098765432', '광고용계정', '스팸 광고', 'system', datetime('now'))")
+
+    # 🚩 복구 데이터 테이블 (SQLite)
+    cursor.execute(\"\"\"
+        CREATE TABLE IF NOT EXISTS recovery_data (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id TEXT UNIQUE NOT NULL,
+            snapshot_time TEXT NOT NULL,
+            channels_json TEXT,
+            roles_json TEXT,
+            server_info_json TEXT,
+            members_roles_json TEXT
+        )
+    \"\"\")
+
+    conn.commit()
+    conn.close()
+    print(f"✅ {BOT_NAME}: SQLite 데이터베이스 '{DB_FILE}' 초기화 완료!")
+
+# 서버별 설정 불러오는 헬퍼 함수
+def get_server_config(guild_id):
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM server_configs WHERE guild_id = ?", (str(guild_id),))
+    config = cursor.fetchone()
+    conn.close()
+    return config
+
+# 서버별 설정 업데이트/삽입 헬퍼 함수
+def set_server_config(guild_id, config_name, config_value):
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute(f\"\"\"
+        INSERT INTO server_configs (guild_id, {config_name}) VALUES (?, ?)
+        ON CONFLICT(guild_id) DO UPDATE SET {config_name} = EXCLUDED.{config_name}
+    \"\"\", (str(guild_id), str(config_value)))
+    conn.commit()
+    conn.close()
+
+# 특정 명령어의 활성화 상태를 확인하는 헬퍼 함수
+def is_command_enabled(guild_id: int, command_name: str) -> bool:
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("SELECT is_enabled FROM server_command_states WHERE guild_id = ? AND command_name = ?", (str(guild_id), command_name))
+    result = cursor.fetchone()
+    conn.close()
+    return result[0] == 1 if result else True # 기본적으로 활성화 (설정 없으면 켜진 상태)
+
+# 명령어 활성화 상태를 업데이트하는 헬퍼 함수
+def set_command_enabled_state(guild_id: int, command_name: str, is_enabled: bool):
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    enabled_val = 1 if is_enabled else 0
+    cursor.execute(\"\"\"
+        INSERT INTO server_command_states (guild_id, command_name, is_enabled)
+        VALUES (?, ?, ?)
+        ON CONFLICT(guild_id) DO UPDATE SET is_enabled = EXCLUDED.is_enabled
+    \"\"\", (str(guild_id), command_name, enabled_val))
+    conn.commit()
+    conn.close()
+
+# 봇 상태 및 활동 설정 불러오기
+def get_bot_presence_settings():
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("SELECT status, activity_type, activity_name FROM bot_presence_settings WHERE id = 1")
+    settings = cursor.fetchone()
+    conn.close()
+    return settings if settings else {'status': 'online', 'activity_type': 'playing', 'activity_name': 'RP 서버 운영'} # 기본값
+
+# 봇 상태 및 활동 설정 업데이트
+def set_bot_presence_settings(status, activity_type, activity_name):
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute(\"\"\"
+        INSERT OR REPLACE INTO bot_presence_settings (id, status, activity_type, activity_name)
+        VALUES (1, ?, ?, ?)
+    \"\"\", (status, activity_type, activity_name))
+    conn.commit()
+    conn.close()
+
+initialize_db()
+
+
+intents = discord.Intents.all()
+intents.message_content = True # 메시지 내용 읽기 권한 활성화
+
+# 봇 접두사 변경 (opendiscordbot!) # 🚩 이름 변경
+bot = commands.Bot(command_prefix='저스트 ', intents=intents)
+
+BOT_NAME = "{bot_name}" # 🚩 봇 이름 사용
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+
+# Flask API 서버 URL
+FLASK_BACKEND_URL = os.getenv("FLASK_BACKEND_URL")
+# Flask API 통신 보안 키 (봇->Flask API)
+BOT_API_KEY = os.getenv("BOT_API_KEY")
+
+# YouTube API 키
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
+
+# 봇 소유자 ID
+BOT_OWNER_ID = int(os.getenv("BOT_OWNER_ID", "0"))
+
+# V4 순수 봇용: 대상 길드 ID
+TARGET_GUILD_ID = int(os.getenv("TARGET_GUILD_ID", "0"))
+
+# 🚩 V4 (순수 봇) 모드 플래그 (스크립트가 설정)
+IS_PURE_BOT_MODE = os.getenv("IS_PURE_BOT_MODE") == "true"
+
+
+if not FLASK_BACKEND_URL and not IS_PURE_BOT_MODE: # 🚩 Pure Bot 모드가 아닐 때만 API URL 필수
+    print("❌ Flask_BACKEND_URL이 설정되지 않았습니다. 봇에서 API로 데이터 푸시 기능이 제한됩니다.")
+if not BOT_API_KEY and not IS_PURE_BOT_MODE: # 🚩 Pure Bot 모드가 아닐 때만 API 키 필수
+    print("❌ BOT_API_KEY가 설정되지 않았습니다. 봇에서 API로 데이터 푸시 시 인증에 실패할 수 있습니다.")
+if not YOUTUBE_API_KEY and not IS_PURE_BOT_MODE: # 🚩 Pure Bot 모드에서는 유튜브 API 필요 없음
+    print("❌ YOUTUBE_API_KEY가 설정되지 않았습니다. 유튜브 활동 감지 기능을 사용할 수 없습니다.")
+if not BOT_OWNER_ID: # 🚩 BOT_OWNER_ID로 변경
+    print("⚠️ BOT_OWNER_ID가 설정되지 않았습니다. 봇 소유자 전용 명령어가 제한될 수 있습니다.")
+if IS_PURE_BOT_MODE and not TARGET_GUILD_ID: # 🚩 순수 봇 모드일 때 길드 ID 필수
+    print("❌ 순수 봇 모드는 TARGET_GUILD_ID가 필수입니다. 슬래시 커맨드 동기화가 실패할 수 있습니다.")
+
+
+@tasks.loop(minutes=1)
+async def record_bot_status():
+    status_info = {
+        "bot_name": BOT_NAME,
+        "last_heartbeat": datetime.datetime.now(datetime.UTC).isoformat(),
+        "status": "Online",
+        "message": "정상 작동 중",
+        "guild_count": len(bot.guilds) if bot.guilds else 0
+    }
+
+    # SQLite에 로컬로 저장 (기존 기능 유지)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(\"\"\"
+        INSERT OR REPLACE INTO bot_status (bot_name, last_heartbeat, status, message, guild_count)
+        VALUES (?, ?, ?, ?, ?)
+    \"\"\", (status_info["bot_name"], status_info["last_heartbeat"], status_info["status"], status_info["message"], status_info["guild_count"]))
+    conn.commit()
+    conn.close()
+
+    # 🚩 Flask API로 봇 상태 푸시 (순수 봇 모드에서는 API 호출 안 함)
+    if not IS_PURE_BOT_MODE and FLASK_BACKEND_URL:
+        try:
+            api_endpoint = f"{FLASK_BACKEND_URL}/api/bot_status"
+            headers = {
+                'Content-Type': "application/json",
+                'X-Api-Key': BOT_API_KEY
+            }
+            response = requests.post(api_endpoint, json=status_info, headers=headers)
+            if response.status_code == 200:
+                print(f"✅ 봇 상태 정보 Flask API로 전송 성공: {response.status_code}")
+            else:
+                print(f"❌ 봇 상태 정보 Flask API 전송 실패: {response.status_code} - {response.text}")
+        except requests.exceptions.ConnectionError as e:
+            print(f"❌ 봇 상태 정보 Flask API 연결 오류: {e}")
+        except Exception as e:
+            print(f"❌ 봇 상태 정보 Flask API 전송 중 알 수 없는 오류: {e}")
+
+
+@tasks.loop(minutes=5)
+async def update_bot_presence():
+    settings = get_bot_presence_settings()
+    if not settings: return
+
+    status_map = {
+        'online': discord.Status.online,
+        'idle': discord.Status.idle,
+        'dnd': discord.Status.dnd,
+        'invisible': discord.Status.invisible
+    }
+    activity_type_map = {
+        'playing': discord.ActivityType.playing,
+        'listening': discord.ActivityType.listening,
+        'watching': discord.ActivityType.watching,
+        'streaming': discord.ActivityType.streaming
+    }
+
+    discord_status = status_map.get(settings['status'], discord.Status.online)
+    discord_activity_type = activity_type_map.get(settings['activity_type'], discord.ActivityType.playing)
+
+    activity = discord.Activity(type=discord_activity_type, name=settings['activity_name'])
+
+    await bot.change_presence(status=discord_status, activity=activity)
+    print(f"✅ 봇 상태 업데이트 완료: 상태={settings['status']}, 활동={settings['activity_type']} {settings['activity_name']}")
+
+
+@bot.event
+async def on_ready():
+    print(f'🚀 {bot.user.name} 봇 준비 완료! 모든 기능 야무지게 시작합니다.')
+    try:
+        # 🚩 V4 (순수 봇) 모드일 경우 특정 길드에만 슬래시 커맨드 동기화
+        if IS_PURE_BOT_MODE and TARGET_GUILD_ID:
+            target_guild_obj = bot.get_guild(TARGET_GUILD_ID)
+            if target_guild_obj:
+                await bot.tree.sync(guild=target_guild_obj) # 특정 길드에만 동기화
+                print(f"✅ 슬래시 커맨드 동기화 완료! (대상 길드: {target_guild_obj.name})")
+            else:
+                print(f"❌ 대상 길드 ({TARGET_GUILD_ID})를 찾을 수 없어 슬래시 커맨드 동기화에 실패했습니다.")
+        else: # 그 외 버전은 글로벌 동기화 (V1, V2, V3)
+            await bot.tree.sync() # 글로벌 동기화
+            print(f"✅ 슬래시 커맨드 동기화 완료! (글로벌)")
+    except Exception as e:
+        print(f"❌ 슬래시 커맨드 동기화 실패: {e}")
+    record_bot_status.start()
+    update_bot_presence.start()
+
+    # Cogs 로드 시 필요한 함수들을 bot 객체에 직접 할당
+    bot.get_server_config = get_server_config
+    bot.set_server_config = set_server_config
+    bot.get_db_connection = get_db_connection
+    bot.is_command_enabled = is_command_enabled
+    bot.set_command_enabled_state = set_command_enabled_state
+    bot.get_bot_presence_settings = get_bot_presence_settings
+    bot.set_bot_presence_settings = set_bot_presence_settings
+    bot.FLASK_BACKEND_URL = FLASK_BACKEND_URL
+    bot.BOT_API_KEY = BOT_API_KEY
+    bot.BOT_OWNER_ID = BOT_OWNER_ID # 🚩 BOT_OWNER_ID로 변경
+
+    # 🚩 V4 (순수 봇) 모드일 경우 Flask API 함수들을 None으로 설정
+    if IS_PURE_BOT_MODE:
+        bot.send_recovery_snapshot_to_api = None
+        bot.get_recovery_snapshot_from_api = None
+    else:
+        bot.send_recovery_snapshot_to_api = send_recovery_snapshot_to_api
+        bot.get_recovery_snapshot_from_api = get_recovery_snapshot_from_api
+
+    if YOUTUBE_API_KEY and not IS_PURE_BOT_MODE: # 🚩 Pure Bot 모드에서는 유튜브 API 필요 없음
+        try:
+            bot.youtube_service = build('youtube', 'v3', developerKey=YOUTUBE_API_KEY)
+            print("✅ YouTube Data API 서비스 빌드 완료.")
+        except Exception as e:
+            print(f"❌ YouTube Data API 서비스 빌드 실패: {e}")
+            bot.youtube_service = None
+    else:
+        bot.youtube_service = None
+
+
+    cogs_to_load = [
+        "cogs.bank",
+        "cogs.car",
+        "cogs.moderation",
+        "cogs.music",
+        "cogs.game",
+        "cogs.youtube_tracker"
+    ]
+    for cog in cogs_to_load:
+        # 🚩 V4 (순수 봇) 모드에서는 youtube_tracker 로드하지 않음 (API 서버 없으므로)
+        if IS_PURE_BOT_MODE and cog == "cogs.youtube_tracker":
+            print("⚠️ 순수 봇 모드에서는 youtube_tracker 코그를 로드하지 않습니다.")
+            continue
+        try:
+            await bot.load_extension(cog)
+            print(f"로드 성공: {cog}")
+        except Exception as e:
+            print(f"로드 실패: {cog} - {e}")
+
+    # 봇이 켜질 때 guild_name이 없는 server_configs 항목을 채워 넣기
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT guild_id FROM server_configs WHERE guild_name IS NULL")
+    guild_ids_without_name = cursor.fetchall()
+
+    for guild_row in guild_ids_without_name:
+        guild_id = int(guild_row['guild_id'])
+        guild = bot.get_guild(guild_id)
+        if guild:
+            cursor.execute("UPDATE server_configs SET guild_name = ? WHERE guild_id = ?", (guild.name, str(guild_id)))
+            print(f"✅ 서버 ID {guild_id}의 이름 '{guild.name}'을(를) DB에 업데이트했습니다.")
+        else:
+            print(f"⚠️ 봇이 길드 {guild_id}에 접근할 수 없습니다. 길드가 존재하지 않거나 봇이 서버에 없습니다.")
+    conn.commit()
+    conn.close()
+
+
+@bot.event
+async def on_message(message):
+    if message.author == bot.user or not message.guild:
+        return
+
+    await bot.process_commands(message)
+
+
+@bot.event
+async def on_member_join(member: discord.Member):
+    """멤버가 서버에 가입할 때 실행됩니다."""
+    if member.bot: return
+    guild = member.guild
+    config = get_server_config(guild.id)
+
+    if config and config.get('welcome_message_enabled', 0):
+        channel_id = config.get('log_channel_id')
+        if not channel_id: return
+
+        channel = bot.get_channel(int(channel_id))
+        if channel:
+            message_text = config.get('welcome_message_text', "어서오세요, {user}님!")
+            message_text = message_text.replace("{user}", member.mention)
+            message_text = message_text.replace("{server}", guild.name)
+            message_text = message_text.replace("{member_count}", str(guild.member_count))
+            try:
+                await channel.send(message_text)
+            except discord.Forbidden:
+                print(f"❌ 채널 {channel.name}에 메시지를 보낼 권한이 없습니다.")
+
+@bot.event
+async def on_member_remove(member: discord.Member):
+    """멤버가 서버를 떠날 때 실행됩니다."""
+    if member.bot: return
+    guild = member.guild
+    config = get_server_config(guild.id)
+
+    if config and config.get('leave_message_enabled', 0):
+        channel_id = config.get('log_channel_id')
+        if not channel_id: return
+
+        channel = bot.get_channel(int(channel_id))
+        if channel:
+            message_text = config.get('leave_message_text', "안녕히가세요, {user}님.")
+            message_text = message_text.replace("{user}", member.display_name)
+            message_text = message_text.replace("{server}", guild.name)
+            message_text = message_text.replace("{member_count}", str(guild.member_count))
+            try:
+                await channel.send(message_text)
+            except discord.Forbidden:
+                print(f"❌ 채널 {channel.name}에 메시지를 보낼 권한이 없습니다.")
+
+
+@bot.event
+async def on_interaction(interaction: discord.Interaction):
+    if interaction.type == discord.InteractionType.application_command and interaction.guild:
+        command_name_parts = [interaction.command.name]
+        if interaction.command.parent:
+            command_name_parts.insert(0, interaction.command.parent.name)
+            if interaction.command.parent.parent:
+                command_name_parts.insert(0, interaction.command.parent.parent.name)
+        full_command_name = " ".join(command_name_parts)
+
+        if not is_command_enabled(interaction.guild.id, full_command_name):
+            await interaction.response.send_message(f"❌ 이 명령어 (`/{full_command_name}`)는 현재 이 서버에서 비활성화되어 있습니다。", ephemeral=True)
+            return
+    
+    await bot.process_commands(interaction)
+
+
+@bot.event
+async def on_app_command_error_global(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    if interaction.response.is_done():
+        print(f"오류 발생 (이미 응답 전송됨): {error}")
+        return
+
+    if isinstance(error, app_commands.CommandInvokeError):
+        print(f"전역 오류 발생: {error.original}")
+        await interaction.response.send_message(f"오류가 발생했습니다: {error.original}", ephemeral=True)
+
+    elif isinstance(error, app_commands.MissingPermissions):
+        await interaction.response.send_message("❌ 이 명령어를 사용할 권한이 없습니다. 관리자(Administrator) 권한이 필요합니다。", ephemeral=True)
+    elif isinstance(error, app_commands.CommandOnCooldown):
+        await interaction.response.send_message(f"❌ 이 명령어는 쿨타임 중입니다. {error.retry_after:.2f}초 후에 다시 시도해주세요。", ephemeral=True)
+    else:
+        print(f"알 수 없는 전역 오류: {error}")
+        await interaction.response.send_message(f"알 수 없는 오류가 발생했습니다: {error}", ephemeral=True)
+
+try:
+    bot.run(BOT_TOKEN)
+except discord.LoginFailure:
+    print("❌ 봇 토큰이 올바르지 않거나 비어있습니다. 토큰을 확인해주세요!")
+except Exception as e:
+    print(f"❌ 봇 실행 중 예상치 못한 오류가 발생했습니다: {e}")
+
+
+# 🚩 복구 봇 API 통신 함수 추가 (bot.py에 직접 정의)
+async def send_recovery_snapshot_to_api(guild_id, snapshot_data):
+    """서버 스냅샷 데이터를 Flask API 서버로 전송합니다."""
+    # 🚩 V4 (순수 봇) 모드에서는 API 통신 안 함. SQLite에 직접 저장.
+    if os.getenv("IS_PURE_BOT_MODE") == "true":
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(\"\"\"
+                CREATE TABLE IF NOT EXISTS recovery_data (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    guild_id TEXT UNIQUE NOT NULL,
+                    snapshot_time TEXT NOT NULL,
+                    channels_json TEXT,
+                    roles_json TEXT,
+                    server_info_json TEXT,
+                    members_roles_json TEXT
+                )
+            \"\"\")
+            cursor.execute(\"\"\"
+                INSERT OR REPLACE INTO recovery_data (guild_id, snapshot_time, channels_json, roles_json, server_info_json, members_roles_json)
+                VALUES (?, ?, ?, ?, ?, ?)
+            \"\"\", (
+                str(guild_id),
+                datetime.datetime.now(datetime.UTC).isoformat(),
+                json.dumps(snapshot_data.get('channels', [])),
+                json.dumps(snapshot_data.get('roles', [])),
+                json.dumps(snapshot_data.get('server_info', {})),
+                json.dumps(snapshot_data.get('members_roles', []))
+            ))
+            conn.commit()
+            print(f"✅ 복구 스냅샷 로컬 SQLite에 저장 완료: {guild_id}")
+            return True
+        except sqlite3.Error as e:
+            print(f"❌ 복구 스냅샷 로컬 저장 오류: {e}")
+            return False
+        finally:
+            cursor.close()
+            conn.close()
+
+    if not os.getenv("IS_FLASK_API_ENABLED") == "true" or not os.getenv("BOT_API_KEY"): # Flask API가 활성화되지 않았거나 API 키 없으면 통신 안 함
+        print("⚠️ Flask API가 활성화되지 않았거나 BOT_API_KEY가 없어 복구 스냅샷을 전송할 수 없습니다.")
+        return False
+    
+    api_endpoint = f"{os.getenv('FLASK_BACKEND_URL')}/api/recovery/snapshot"
+    headers = {
+        'Content-Type': "application/json",
+        'X-Api-Key': os.getenv("BOT_API_KEY")
+    }
+    payload = {
+        'guild_id': str(guild_id),
+        'snapshot_data': snapshot_data
+    }
+    
+    try:
+        response = requests.post(api_endpoint, json=payload, headers=headers)
+        if response.status_code == 200:
+            print(f"✅ 복구 스냅샷 Flask API로 전송 성공: {response.status_code}")
+            return True
+        else:
+            print(f"❌ 복구 스냅샷 Flask API 전송 실패: {response.status_code} - {response.text}")
+            return False
+    except requests.exceptions.ConnectionError as e:
+        print(f"❌ 복구 스냅샷 Flask API 연결 오류: {e}")
+        return False
+    except Exception as e:
+        print(f"❌ 복구 스냅샷 Flask API 전송 중 알 수 없는 오류: {e}")
+        return False
+
+async def get_recovery_snapshot_from_api(guild_id):
+    """Flask API 서버로부터 특정 서버의 최신 스냅샷 데이터를 가져옵니다."""
+    # 🚩 V4 (순수 봇) 모드에서는 API 통신 안 함. SQLite에서 직접 가져옴.
+    if os.getenv("IS_PURE_BOT_MODE") == "true":
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(\"\"\"
+                CREATE TABLE IF NOT EXISTS recovery_data (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    guild_id TEXT UNIQUE NOT NULL,
+                    snapshot_time TEXT NOT NULL,
+                    channels_json TEXT,
+                    roles_json TEXT,
+                    server_info_json TEXT,
+                    members_roles_json TEXT
+                )
+            \"\"\")
+            cursor.execute(\"\"\"
+                SELECT channels_json, roles_json, server_info_json, members_roles_json FROM recovery_data
+                WHERE guild_id = ? ORDER BY snapshot_time DESC LIMIT 1
+            \"\"\", (str(guild_id),))
+            snapshot_row = cursor.fetchone()
+            if snapshot_row:
+                return {
+                    "guild_id": str(guild_id),
+                    "channels": json.loads(snapshot_row['channels_json']),
+                    "roles": json.loads(snapshot_row['roles_json']),
+                    "server_info": json.loads(snapshot_row['server_info_json']),
+                    "members_roles": json.loads(snapshot_row['members_roles_json'])
+                }
+            else:
+                return None
+        except sqlite3.Error as e:
+            print(f"❌ 복구 스냅샷 로컬 조회 오류: {e}")
+            return None
+        finally:
+            cursor.close()
+            conn.close()
+
+    if not os.getenv("IS_FLASK_API_ENABLED") == "true" or not os.getenv("BOT_API_KEY"): # Flask API가 활성화되지 않았거나 API 키 없으면 통신 안 함
+        print("⚠️ Flask API가 활성화되지 않았거나 BOT_API_KEY가 없어 복구 스냅샷을 가져올 수 없습니다.")
+        return None
+    
+    api_endpoint = f"{os.getenv('FLASK_BACKEND_URL')}/api/recovery/snapshot/{guild_id}"
+    headers = {
+        'Content-Type': "application/json",
+        'X-Api-Key': os.getenv("BOT_API_KEY")
+    }
+
+    try:
+        response = requests.get(api_endpoint, headers=headers)
+        if response.status_code == 200:
+            print(f"✅ 복구 스냅샷 Flask API로부터 데이터 수신 성공.")
+            return response.json()
+        elif response.status_code == 404:
+            print(f"❌ 복구 스냅샷을 찾을 수 없습니다: 서버 {guild_id}")
+            return None
+        else:
+            print(f"❌ 복구 스냅샷 Flask API 수신 실패: {response.status_code} - {response.text}")
+            return None
+    except requests.exceptions.RequestException as e:
+        print(f"❌ 복구 스냅샷 Flask API 연결 오류: {e}")
+        return None
+    except Exception as e:
+        print(f"❌ 복구 스냅샷 Flask API 수신 중 알 수 없는 오류: {e}")
+        return None
+"""
+
+# 2.7. cogs/moderation.py
+def get_moderation_py_content(bot_name, currency_name):
+    return f"""
+import discord
+from discord.ext import commands
+from discord import app_commands
+import sqlite3
+import datetime
+import json
+import os
+import re
+import collections
+import asyncio
+
+class Moderation(commands.Cog):
+    message_timestamps = collections.defaultdict(lambda: collections.defaultdict(collections.deque))
+
+    def __init__(self, bot):
+        self.bot = bot
+        self.get_db_connection = bot.get_db_connection
+        self.get_server_config = bot.get_server_config
+        self.set_server_config = bot.set_server_config
+        self.is_command_enabled = bot.is_command_enabled
+        self.set_command_enabled_state = bot.set_command_enabled_state
+        self.get_bot_presence_settings = bot.get_bot_presence_settings
+        self.set_bot_presence_settings = bot.set_bot_presence_settings
+        self.send_recovery_snapshot_to_api = bot.send_recovery_snapshot_to_api
+        self.get_recovery_snapshot_from_api = bot.get_recovery_snapshot_from_api
+
+
+    # --- 슬래시 커맨드 그룹 ---
+    config_group = app_commands.Group(name="설정", description="이 서버의 봇 설정을 관리합니다。", guild_only=True)
+    recovery_group = app_commands.Group(name="복구", description="서버 스냅샷을 생성하거나 복구합니다。", guild_only=True)
+
+    # --- 권한 확인 헬퍼 데코레이터 ---
+    # is_bot_owner: True면 봇 소유자(@opendiscordbot owner ID)만
+    # required_role_name: 서버 관리하기 역할 또는 Administrator 권한 체크 (기본값 "서버 관리하기")
+    async def _check_permission(self, interaction_or_ctx, is_bot_owner: bool = False, required_role_name: str = "서버 관리하기"):
+        if isinstance(interaction_or_ctx, discord.Interaction):
+            user = interaction_or_ctx.user
+            guild = interaction_or_ctx.guild
+            send_message_func = interaction_or_ctx.response.send_message
+            is_ephemeral = True
+        elif isinstance(interaction_or_ctx, commands.Context):
+            user = interaction_or_ctx.author
+            guild = interaction_or_ctx.guild
+            send_message_func = interaction_or_ctx.send
+            is_ephemeral = False
+        else:
+            return False
+
+        # 1. 봇 소유자 권한 확인 (ID로만 체크)
+        if is_bot_owner:
+            if user.id == self.bot.BOT_OWNER_ID:
+                return True
+            else:
+                await send_message_func("❌ 이 명령어는 봇 소유자만 사용할 수 있습니다。", ephemeral=is_ephemeral)
+                return False
+
+        # 2. '서버 관리하기' 역할 또는 Administrator 권한 확인 (일반 관리자용)
+        if guild: # 길드에서 호출된 경우에만 역할/권한 체크
+            server_manager_role = discord.utils.get(guild.roles, name=required_role_name)
+            if server_manager_role and server_manager_role in user.roles:
+                return True
+
+            if user.guild_permissions.administrator:
+                return True
+
+        # 어떤 조건도 만족하지 못했을 경우
+        if required_role_name:
+            await send_message_func(f"❌ 이 명령어는 '{required_role_name}' 역할 또는 Administrator 권한이 필요합니다。", ephemeral=is_ephemeral)
+        else:
+            await send_message_func("❌ 이 명령어를 사용할 권한이 없습니다。", ephemeral=is_ephemeral)
+        return False
+
+    # 슬래시 커맨드용 커스텀 권한 체크 (interaction 객체 사용)
+    def _is_server_manager_check(self, interaction: discord.Interaction):
+        return self._check_permission(interaction, is_bot_owner=False)
+
+    def _is_bot_owner_command_check(self, interaction: discord.Interaction):
+        return self._check_permission(interaction, is_bot_owner=True)
+
+    # 메시지 커맨드용 커스텀 권한 체크 (commands.Context 객체 사용)
+    def _is_server_manager_msg_check(self, ctx: commands.Context):
+        return self._check_permission(ctx, is_bot_owner=False)
+
+    def _is_bot_owner_msg_check(self, ctx: commands.Context):
+        return self._check_permission(ctx, is_bot_owner=True)
+
+
+    # --- 채널/역할 설정 헬퍼 함수 ---
+    async def _set_channel_config(self, guild_id, config_name, channel, interaction=None, ctx=None):
+        self.set_server_config(guild_id, config_name, channel.id)
+        response_msg = f"✅ {channel.mention}으로 설정되었습니다."
+        if interaction:
+            await interaction.response.send_message(response_msg, ephemeral=True)
+        elif ctx:
+            await ctx.send(response_msg)
+
+    async def _set_role_config(self, guild_id, config_name, role, interaction=None, ctx=None):
+        self.set_server_config(guild_id, config_name, role.id)
+        response_msg = f"✅ {role.mention}으로 설정되었습니다."
+        if interaction:
+            await interaction.response.send_message(response_msg, ephemeral=True)
+        elif ctx:
+            await ctx.send(response_msg)
+
+    @config_group.command(name="차량등록채널", description="차량 등록 신청 포스트가 올라올 채널을 설정합니다.")
+    @app_commands.describe(채널="설정할 채널")
+    @app_commands.check(_is_server_manager_check)
+    async def set_registration_channel(self, interaction: discord.Interaction, 채널: discord.TextChannel):
+        await self._set_channel_config(interaction.guild.id, 'registration_channel_id', 채널, interaction)
+
+    @config_group.command(name="차량관리채널", description="차량 등록 알림 및 관리 버튼이 표시될 채널을 설정합니다.")
+    @app_commands.describe(채널="설정할 채널")
+    @app_commands.check(_is_server_manager_check)
+    async def set_car_admin_channel(self, interaction: discord.Interaction, 채널: discord.TextChannel):
+        await self._set_channel_config(interaction.guild.id, 'car_admin_channel_id', 채널, interaction)
+
+    @config_group.command(name="차량관리역할", description="차량 등록 알림 멘션을 받을 관리자 역할을 설정합니다.")
+    @app_commands.describe(역할="설정할 역할")
+    @app_commands.check(_is_server_manager_check)
+    async def set_car_admin_role(self, interaction: discord.Interaction, 역할: discord.Role):
+        await self._set_role_config(interaction.guild.id, 'car_admin_role_id', 역할, interaction)
+
+    @config_group.command(name="차량승인채널", description="승인된 차량 등록증이 올라올 채널을 설정합니다.")
+    @app_commands.describe(채널="설정할 채널")
+    @app_commands.check(_is_server_manager_check)
+    async def set_approved_cars_channel(self, interaction: discord.Interaction, 채널: discord.TextChannel):
+        await self._set_channel_config(interaction.guild.id, 'approved_cars_channel_id', 채널, interaction)
+
+    @config_group.command(name="은행채널", description="은행 관련 명령어를 사용할 채널을 설정합니다.")
+    @app_commands.describe(채널="설정할 채널")
+    @app_commands.check(_is_server_manager_check)
+    async def set_bank_channel(self, interaction: discord.Interaction, 채널: discord.TextChannel):
+        await self._set_channel_config(interaction.guild.id, 'bank_channel_id', 채널, interaction)
+
+    @config_group.command(name="티켓개설채널", description="사용자가 /ticket open을 사용할 수 있는 채널을 설정합니다.")
+    @app_commands.describe(채널="설정할 채널")
+    @app_commands.check(_is_server_manager_check)
+    async def set_ticket_open_channel(self, interaction: discord.Interaction, 채널: discord.TextChannel):
+        await self._set_channel_config(interaction.guild.id, 'ticket_open_channel_id', 채널, interaction)
+
+    @config_group.command(name="티켓카테고리", description="새 티켓 채널이 생성될 카테고리를 설정합니다.")
+    @app_commands.describe(카테고리="설정할 카테고리")
+    @app_commands.check(_is_server_manager_check)
+    async def set_ticket_category(self, interaction: discord.Interaction, 카테고리: discord.CategoryChannel):
+        self.set_server_config(interaction.guild.id, 'ticket_category_id', 카테고리.id)
+        await interaction.response.send_message(f"✅ 티켓 카테고리가 '{카테고리.name}'으로 설정되었습니다.", ephemeral=True)
+
+    @config_group.command(name="티켓관리역할", description="티켓 채널에 자동 추가될 스태프 역할을 설정합니다.")
+    @app_commands.describe(역할="설정할 역할")
+    @app_commands.check(_is_server_manager_check)
+    async def set_ticket_staff_role(self, interaction: discord.Interaction, 역할: discord.Role):
+        await self._set_role_config(interaction.guild.id, 'ticket_staff_role_id', 역할, interaction)
+
+    @config_group.command(name="등록세", description="차량 등록세를 설정합니다.")
+    @app_commands.describe(금액="설정할 등록세 금액")
+    @app_commands.check(_is_server_manager_check)
+    async def set_registration_tax(self, interaction: discord.Interaction, 금액: int):
+        self.set_server_config(interaction.guild.id, 'car_registration_tax', 금액)
+        await interaction.response.send_message(f"✅ 차량 등록세가 **{금액} 위키원**으로 설정되었습니다.", ephemeral=True)
+
+    @config_group.command(name="환영메시지", description="새 멤버가 가입할 때 보낼 메시지와 활성화 여부를 설정합니다.")
+    @app_commands.describe(메시지="보낼 메시지 ({user}, {server}, {member_count} 플레이스홀더 사용 가능)", 활성화="환영 메시지 활성화 여부")
+    @app_commands.choices(활성화=[app_commands.Choice(name="활성화", value=True), app_commands.Choice(name="비활성화", value=False)])
+    @app_commands.check(_is_server_manager_check)
+    async def set_welcome_message(self, interaction: discord.Interaction, 메시지: str, 활성화: bool):
+        self.set_server_config(interaction.guild.id, 'welcome_message_text', 메시지)
+        self.set_server_config(interaction.guild.id, 'welcome_message_enabled', 활성화)
+        status = "활성화" if 활성화 else "비활성화"
+        await interaction.response.send_message(f"✅ 환영 메시지가 '{메시지}'로 설정되었으며, 기능이 {status}되었습니다.", ephemeral=True)
+
+    @config_group.command(name="작별메시지", description="멤버가 떠날 때 보낼 메시지와 활성화 여부를 설정합니다.")
+    @app_commands.describe(메시지="보낼 메시지 ({user}, {server}, {member_count} 플레이스홀더 사용 가능)", 활성화="작별 메시지 활성화 여부")
+    @app_commands.choices(활성화=[app_commands.Choice(name="활성화", value=True), app_commands.Choice(name="비활성화", value=False)])
+    @app_commands.check(_is_server_manager_check)
+    async def set_leave_message(self, interaction: discord.Interaction, 메시지: str, 활성화: bool):
+        self.set_server_config(interaction.guild.id, 'leave_message_text', 메시지)
+        self.set_server_config(interaction.guild.id, 'leave_message_enabled', 활성화)
+        status = "활성화" if 활성화 else "비활성화"
+        await interaction.response.send_message(f"✅ 작별 메시지가 '{메시지}'로 설정되었으며, 기능이 {status}되었습니다。", ephemeral=True)
+
+    @config_group.command(name="유튜브활동", description="유튜브 채널 새 영상 알림 기능을 설정합니다.")
+    @app_commands.describe(활성화="기능 활성화 여부", 알림채널="새 영상 알림을 보낼 채널", 채널id="모니터링할 유튜브 채널 ID (쉼표로 구분)")
+    @app_commands.choices(활성화=[app_commands.Choice(name="활성화", value=True), app_commands.Choice(name="비활성화", value=False)])
+    @app_commands.check(_is_server_manager_check)
+    async def set_youtube_activity(self, interaction: discord.Interaction, 활성화: bool, 알림채널: discord.TextChannel, 채널id: str = ""):
+        self.set_server_config(interaction.guild.id, 'youtube_activity_enabled', 활성화)
+        self.set_server_config(interaction.guild.id, 'youtube_notification_channel_id', 알림채널.id)
+
+        youtube_channel_ids = [cid.strip() for cid in 채널id.split(',') if cid.strip()]
+        self.set_server_config(interaction.guild.id, 'youtube_channel_ids_json', json.dumps(youtube_channel_ids))
+
+        status_msg = "활성화" if 활성화 else "비활성화"
+        ids_msg = f"모니터링 채널: {', '.join(youtube_channel_ids) if youtube_channel_ids else '없음'}"
+        await interaction.response.send_message(f"✅ 유튜브 활동 알림 기능이 {status_msg}되었습니다. 알림 채널: {알림채널.mention}. {ids_msg}", ephemeral=True)
+
+    @config_group.command(name="모든설정확인", description="이 서버의 현재 봇 설정들을 확인합니다.")
+    @app_commands.check(_is_server_manager_check)
+    async def show_all_configs(self, interaction: discord.Interaction):
+        server_config = self.bot.get_server_config(interaction.guild.id)
+        if not server_config:
+            await interaction.response.send_message("❌ 이 서버에 저장된 봇 설정이 없습니다. `/설정` 명령어를 사용해 설정해주세요。", ephemeral=True)
+            return
+
+        config_details = "--- 현재 서버 설정 ---\n"
+        for key, value in server_config.items():
+            if key == 'guild_id':
+                config_details += f"**서버 ID:** {value}\n"
+            elif key == 'guild_name':
+                config_details += f"**서버 이름:** {value if value else '미지정'}\n"
+            elif '_channel_id' in key and value:
+                channel = self.bot.get_channel(int(value))
+                config_details += f"**{key.replace('_id', '').replace('_channel', ' 채널')}:** {channel.mention if channel else '채널을 찾을 수 없음'} (`{value}`)\n"
+            elif '_role_id' in key and value:
+                role = interaction.guild.get_role(int(value))
+                config_details += f"**{key.replace('_id', '').replace('_role', ' 역할')}:** {role.mention if role else '역할을 찾을 수 없음'} (`{value}`)\n"
+            elif '_category_id' in key and value:
+                category = self.bot.get_channel(int(value))
+                config_details += f"**{key.replace('_id', '').replace('_category', ' 카테고리')}:** {category.name if category else '카테고리를 찾을 수 없음'} (`{value}`)\n"
+            elif 'json' in key:
+                display_value = value
+                try:
+                    parsed_json = json.loads(value)
+                    display_value = str(parsed_json)
+                except json.JSONDecodeError:
+                    pass
+                config_details += f"**{key.replace('_json', ' (JSON)')}:** {display_value}\n"
+            else:
+                display_value = value
+                if isinstance(value, int) and (key.endswith('_enabled') or key.endswith('_active')):
+                    display_value = "활성화 ✅" if value == 1 else "비활성화 ❌"
+                config_details += f"**{key}:** {display_value}\n"
+
+        embed = discord.Embed(
+            title=f"{interaction.guild.name} 서버의 봇 설정",
+            description=config_details,
+            color=discord.Color.blue()
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @config_group.command(name="봇상태설정", description="봇의 Discord 상태와 활동을 설정합니다 (봇 소유자 전용)。")
+    @app_commands.describe(
+        상태="봇의 상태 (온라인, 자리비움, 방해금지, 오프라인표시)",
+        활동유형="활동 유형 (플레이중, 스트리밍중, 듣는중, 시청중)",
+        활동메시지="활동에 표시할 메시지"
+    )
+    @app_commands.check(_is_bot_owner_command_check)
+    async def set_bot_status_command(self, interaction: discord.Interaction,
+                                     상태: str, 활동유형: str, 활동메시지: str):
+        valid_status = ['온라인', '자리비움', '방해금지', '오프라인표시']
+        valid_activity_type = ['플레이중', '스트리밍중', '듣는중', '시청중']
+
+        if 상태 not in valid_status:
+            await interaction.response.send_message(f"❌ 유효하지 않은 상태입니다. ({', '.join(valid_status)} 중 선택)", ephemeral=True)
+            return
+        if 활동유형 not in valid_activity_type:
+            await interaction.response.send_message(f"❌ 유효하지 않은 활동 유형입니다. ({', '.join(valid_activity_type)} 중 선택)", ephemeral=True)
+            return
+
+        status_map = {'online': 'online', '자리비움': 'idle', '방해금지': 'dnd', '오프라인표시': 'invisible'}
+        activity_type_map = {'playing': 'playing', '스트리밍중': 'streaming', '듣는중': 'listening', '시청중': 'watching'}
+
+        self.set_bot_presence_settings(
+            status_map[상태],
+            activity_type_map[활동유형],
+            활동메시지
+        )
+        await interaction.response.send_message(f"✅ 봇의 Discord 상태가 성공적으로 설정되었습니다. 몇 분 내로 반영됩니다。", ephemeral=True)
+
+
+    # --- 명령어 활성화/비활성화 그룹 ---
+    command_toggle_group = app_commands.Group(name="명령어", description="이 서버의 명령어 활성화 상태를 관리합니다。", guild_only=True)
+
+    @command_toggle_group.command(name="활성화", description="이 서버에서 특정 슬래시 커맨드를 활성화합니다.")
+    @app_commands.describe(커맨드="활성화할 명령어 (예: 잔액, 차량등록)")
+    @app_commands.check(_is_server_manager_check)
+    async def enable_command(self, interaction: discord.Interaction, 커맨드: str):
+        self.set_command_enabled_state(interaction.guild.id, 커맨드, True)
+        await interaction.response.send_message(f"✅ 명령어 `저스트 {커맨드}`가 이 서버에서 활성화되었습니다。", ephemeral=True)
+
+    @command_toggle_group.command(name="비활성화", description="이 서버에서 특정 슬래시 커맨드를 비활성화합니다.")
+    @app_commands.describe(커맨드="비활성화할 명령어 (예: 잔액, 차량등록)")
+    @app_commands.check(_is_server_manager_check)
+    async def disable_command(self, interaction: discord.Interaction, 커맨드: str):
+        self.set_command_enabled_state(interaction.guild.id, 커맨드, False)
+        await interaction.response.send_message(f"❌ 명령어 `저스트 {커맨드}`가 이 서버에서 비활성화되었습니다。", ephemeral=True)
+
+    @command_toggle_group.command(name="상태확인", description="이 서버의 모든 명령어 활성화 상태를 확인합니다.")
+    @app_commands.check(_is_server_manager_check)
+    async def check_command_states(self, interaction: discord.Interaction):
+        conn = self.get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT command_name, is_enabled FROM server_command_states WHERE guild_id = ?", (str(interaction.guild.id),))
+        states = cursor.fetchall()
+        conn.close()
+
+        status_message = "--- 명령어 활성화 상태 ---\n"
+        if not states:
+            status_message += "모든 명령어는 기본적으로 활성화되어 있습니다 (별도 설정 없음).\n"
+        else:
+            for state in states:
+                status = "활성화됨 ✅" if state['is_enabled'] == 1 else "비활성화됨 ❌"
+                status_message += f"**저스트 {state['command_name']}**: {status}\n"
+
+        embed = discord.Embed(
+            title=f"{interaction.guild.name} 서버의 명령어 상태",
+            description=status_message,
+            color=discord.Color.light_grey()
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # --- 슬래시 커맨드 (모더레이션) ---
+    @app_commands.command(name="킥", description="유저를 서버에서 강퇴시킵니다.")
+    @app_commands.describe(유저="강퇴할 유저", 사유="강퇴 사유")
+    @app_commands.check(_is_server_manager_check)
+    async def kick_slash(self, interaction: discord.Interaction, 유저: discord.Member, 사유: str = "사유 없음"):
+        await self._kick_user(유저, 사유, interaction=interaction)
+
+    @app_commands.command(name="밴", description="유저를 서버에서 추방시킵니다.")
+    @app_commands.describe(유저="추방할 유저", 사유="추방 사유", 일수="메시지 삭제 일수 (최대 7일)")
+    @app_commands.check(_is_server_manager_check)
+    async def ban_slash(self, interaction: discord.Interaction, 유저: discord.Member, 사유: str = "사유 없음", 일수: app_commands.Range[int, 0, 7] = 0):
+        await self._ban_user(유저, 사유, 일수, interaction=interaction)
+
+    @app_commands.command(name="청소", description="채널의 메시지를 삭제합니다.")
+    @app_commands.describe(개수="삭제할 메시지 개수 (최대 100개)")
+    @app_commands.check(_is_server_manager_check)
+    async def clear_slash(self, interaction: discord.Interaction, 개수: app_commands.Range[int, 1, 100]):
+        await self._clear_messages(개수, interaction=interaction)
+
+    @app_commands.command(name="역할부여", description="유저에게 역할을 부여합니다.")
+    @app_commands.describe(유저="역할을 부여할 유저", 역할="부여할 역할")
+    @app_commands.check(_is_server_manager_check)
+    async def add_role_slash(self, interaction: discord.Interaction, 유저: discord.Member, 역할: discord.Role):
+        await self._manage_role(유저, 역할, 'add', interaction=interaction)
+
+    @app_commands.command(name="역할삭제", description="유저의 역할을 삭제합니다.")
+    @app_commands.describe(유저="역할을 삭제할 유저", 역할="삭제할 역할")
+    @app_commands.check(_is_server_manager_check)
+    async def remove_role_slash(self, interaction: discord.Interaction, 유저: discord.Member, 역할: discord.Role):
+        await self._manage_role(유저, 역할, 'remove', interaction=interaction)
+
+    @app_commands.command(name="경고", description="유저에게 경고를 부여합니다.")
+    @app_commands.describe(유저="경고를 줄 유저", 사유="경고 사유")
+    @app_commands.check(_is_server_manager_check)
+    async def warn_slash(self, interaction: discord.Interaction, 유저: discord.Member, 사유: str = "사유 없음"):
+        await self._warn_user(유저, 사유, interaction=interaction)
+
+    @app_commands.command(name="경고조회", description="유저의 경고 내역을 조회합니다.")
+    @app_commands.describe(유저="경고 내역을 조회할 유저")
+    @app_commands.check(_is_server_manager_check)
+    async def check_warnings_slash(self, interaction: discord.Interaction, 유저: discord.Member):
+        await self._check_warnings(유저, interaction=interaction)
+
+    @app_commands.command(name="경고삭제", description="유저의 경고를 삭제합니다.")
+    @app_commands.describe(유저="경고를 삭제할 유저", 인덱스="삭제할 경고의 번호 (모두 삭제하려면 '모두')", 사유="경고 삭제 사유")
+    @app_commands.check(_is_server_manager_check)
+    async def remove_warning_slash(self, interaction: discord.Interaction, 유저: discord.Member, 인덱스: str, 사유: str = "사유 없음"):
+        await self._remove_warning(유저, 인덱스, 사유, interaction=interaction)
+
+    # --- 티켓 명령어 그룹 ---
+    ticket_group = app_commands.Group(name="티켓", description="고객 지원 티켓을 관리합니다.", guild_only=True)
+
+    @ticket_group.command(name="오픈", description="새로운 고객 지원 티켓을 엽니다.")
+    @app_commands.describe(사유="티켓을 여는 이유")
+    @app_commands.guild_only()
+    async def open_ticket_slash(self, interaction: discord.Interaction, 사유: str = "사유 없음"):
+        await self._open_ticket(interaction.user, interaction.guild, interaction.channel, 사유, interaction=interaction)
+
+    @ticket_group.command(name="닫기", description="현재 채널의 티켓을 닫습니다.")
+    @app_commands.describe(사유="티켓을 닫는 이유")
+    @app_commands.guild_only()
+    @app_commands.check(_is_server_manager_check)
+    async def close_ticket_slash(self, interaction: discord.Interaction, 사유: str = "사유 없음"):
+        await self._close_ticket(interaction.user, interaction.channel, 사유, interaction=interaction)
+
+    @app_commands.command(name="봇상태", description=f"현재 {bot_name}의 상태와 활동을 확인합니다。") # 🚩 이름 변경
+    @app_commands.guild_only()
+    async def show_bot_status_slash(self, interaction: discord.Interaction):
+        await self._show_bot_status(interaction.user, interaction.channel, interaction=interaction)
+
+    @app_commands.command(name="스캔블랙리스트", description="글로벌 블랙리스트에 등록된 악성 유저인지 스캔합니다。")
+    @app_commands.describe(유저="스캔할 유저를 멘션하세요。")
+    @app_commands.guild_only()
+    @app_commands.check(_is_server_manager_check)
+    async def scan_blacklist_slash(self, interaction: discord.Interaction, 유저: discord.Member):
+        await self._scan_blacklist_user(유저, interaction=interaction)
+
+    @app_commands.command(name="보안리포트", description="이 서버의 보안 설정 상태에 대한 리포트를 제공합니다。")
+    @app_commands.guild_only()
+    @app_commands.check(_is_server_manager_check)
+    async def security_report_slash(self, interaction: discord.Interaction):
+        await self._security_report(interaction=interaction)
+
+    @app_commands.command(name="명령어리스트", description="이 채널에서 사용 가능한 명령어 목록을 보여줍니다。")
+    @app_commands.guild_only()
+    async def command_list_slash(self, interaction: discord.Interaction):
+        await self._list_commands_report(interaction.guild, interaction.channel, interaction=interaction)
+
+    # 🚩 복구 봇 - 스냅샷 생성/복구 명령어 추가
+    @recovery_group.command(name="생성", description="현재 서버의 스냅샷을 생성하여 백업합니다。")
+    @app_commands.guild_only()
+    @app_commands.check(_is_server_manager_check)
+    async def create_snapshot_slash(self, interaction: discord.Interaction):
+        await self._create_server_snapshot(interaction.guild, interaction=interaction)
+
+    @recovery_group.command(name="복구", description="최근 저장된 스냅샷으로 서버를 복구합니다。")
+    @app_commands.guild_only()
+    @app_commands.check(_is_server_manager_check)
+    async def restore_snapshot_slash(self, interaction: discord.Interaction):
+        await self._restore_server_snapshot(interaction.guild, interaction=interaction)
+
+
+    # --- 메시지 기반 명령어 ---
+    @commands.command(name="킥", help=f"유저를 서버에서 강퇴시킵니다. (예: 저스트 킥 @유저 사유)")
+    @commands.check(_is_server_manager_msg_check)
+    async def kick_msg(self, ctx: commands.Context, 유저: discord.Member, *, 사유: str = "사유 없음"):
+        await self._kick_user(유저, 사유, ctx=ctx)
+
+    @commands.command(name="밴", help=f"유저를 서버에서 추방시킵니다. (예: 저스트 밴 @유저 사유)")
+    @commands.check(_is_server_manager_msg_check)
+    async def ban_msg(self, ctx: commands.Context, 유저: discord.Member, *, 사유: str = "사유 없음"):
+        await self._ban_user(유저, 사유, 0, ctx=ctx)
+
+    @commands.command(name="청소", help=f"채널의 메시지를 삭제합니다. (예: 저스트 청소 10)")
+    @commands.check(_is_server_manager_msg_check)
+    async def clear_msg(self, ctx: commands.Context, 개수: int):
+        await self._clear_messages(개수, ctx=ctx)
+
+    @commands.command(name="역할부여", help=f"유저에게 역할을 부여합니다. (예: 저스트 역할부여 @유저 @역할)")
+    @commands.check(_is_server_manager_msg_check)
+    async def add_role_msg(self, ctx: commands.Context, 유저: discord.Member, 역할: discord.Role):
+        await self._manage_role(유저, 역할, 'add', ctx=ctx)
+
+    @commands.command(name="역할삭제", help=f"유저의 역할을 삭제합니다. (예: 저스트 역할삭제 @유저 @역할)")
+    @commands.check(_is_server_manager_msg_check)
+    async def remove_role_msg(self, ctx: commands.Context, 유저: discord.Member, 역할: discord.Role):
+        await self._manage_role(유저, 역할, 'remove', ctx=ctx)
+
+    @commands.command(name="경고", help=f"유저에게 경고를 부여합니다. (예: 저스트 경고 @유저 사유)")
+    @commands.check(_is_server_manager_msg_check)
+    async def warn_msg(self, ctx: commands.Context, 유저: discord.Member, *, 사유: str = "사유 없음"):
+        await self._warn_user(유저, 사유, ctx=ctx)
+
+    @commands.command(name="경고조회", help=f"유저의 경고 내역을 조회합니다. (예: 저스트 경고조회 @유저)")
+    @commands.check(_is_server_manager_msg_check)
+    async def check_warnings_msg(self, ctx: commands.Context, 유저: discord.Member):
+        await self._check_warnings(유저, ctx=ctx)
+
+    @commands.command(name="경고삭제", help=f"유저의 경고를 삭제합니다. (예: 저스트 경고삭제 @유저 1 사유 / 저스트 경고삭제 @유저 모두 사유)")
+    @commands.check(_is_server_manager_msg_check)
+    async def remove_warning_msg(self, ctx: commands.Context, 유저: discord.Member, 인덱스: str, *, 사유: str = "사유 없음"):
+        await self._remove_warning(유저, 인덱스, 사유, ctx=ctx)
+
+    @commands.command(name="봇상태", help=f"현재 {bot_name}의 상태와 활동을 확인합니다。 (예: 저스트 봇상태)") # 🚩 이름 변경
+    async def show_bot_status_msg(self, ctx: commands.Context):
+        await self._show_bot_status(ctx.author, ctx.channel, ctx=ctx)
+
+    @commands.command(name="스캔블랙리스트", help=f"글로벌 블랙리스트에 등록된 악성 유저인지 스캔합니다. (예: 저스트 스캔블랙리스트 @유저)")
+    @commands.check(_is_server_manager_msg_check)
+    async def scan_blacklist_msg(self, ctx: commands.Context, 유저: discord.Member):
+        await self._scan_blacklist_user(유저, ctx=ctx)
+
+    @commands.command(name="보안리포트", help=f"이 서버의 보안 설정 상태에 대한 리포트를 제공합니다. (예: 저스트 보안리포트)")
+    @commands.check(_is_server_manager_msg_check)
+    async def security_report_msg(self, ctx: commands.Context):
+        await self._security_report(ctx=ctx)
+
+    @commands.command(name="명령어리스트", help=f"이 채널에서 사용 가능한 명령어 목록을 보여줍니다. (예: 저스트 명령어리스트)")
+    async def command_list_msg(self, ctx: commands.Context):
+        if not ctx.guild:
+            await ctx.send("이 명령어는 서버에서만 사용할 수 있습니다.")
+            return
+        await self._list_commands_report(ctx.guild, ctx.channel, ctx=ctx)
+
+    @commands.command(name="스냅샷생성", help=f"현재 서버의 스냅샷을 생성하여 백업합니다。")
+    @commands.check(_is_server_manager_msg_check)
+    async def create_snapshot_msg(self, ctx: commands.Context):
+        await self._create_server_snapshot(ctx.guild, ctx=ctx)
+
+    @commands.command(name="스냅샷복구", help=f"최근 저장된 스냅샷으로 서버를 복구합니다。")
+    @commands.check(_is_server_manager_msg_check)
+    async def restore_snapshot_msg(self, ctx: commands.Context):
+        await self._restore_server_snapshot(ctx.guild, ctx=ctx)
+
+    # --- 메시지 리스너 (보안 필터) ---
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        if message.author.bot or not message.guild:
+            return
+
+        await self._process_security_filters(message)
+"""
+
+```python
+# 🚩 (계속) ... /cogs/moderation.py
+    # --- 내부 함수들 (슬래시 및 메시지 기반 명령어에서 공통 사용) ---
+
+    async def _kick_user(self, 유저: discord.Member, 사유: str, interaction: discord.Interaction = None, ctx: commands.Context = None, channel_to_send=None):
+        target_guild = interaction.guild if interaction else ctx.guild
+        target_channel = interaction.channel if interaction else ctx.channel if ctx else channel_to_send
+        # 권한 체크는 이미 데코레이터에서 수행 (여기는 순수 로직만)
+
+        if 유저.bot:
+            response_msg = "❌ 봇에게는 킥을 할 수 없습니다!"
+            if interaction: await interaction.response.send_message(response_msg, ephemeral=True)
+            elif ctx: await ctx.send(response_msg)
+            elif channel_to_send: await channel_to_send.send(response_msg)
+            return
+
+        if 유저.top_role >= target_guild.me.top_role:
+            response_msg = "❌ 저보다 높은 역할의 유저는 킥할 수 없습니다!"
+            if interaction: await interaction.response.send_message(response_msg, ephemeral=True)
+            elif ctx: await ctx.send(response_msg)
+            elif channel_to_send: await channel_to_send.send(response_msg)
+            return
+
+        caller_member = interaction.user if interaction else ctx.author
+        if 유저.top_role >= caller_member.top_role and not caller_member.guild_permissions.administrator:
+            response_msg = "❌ 당신보다 높은 역할의 유저는 킥할 수 없습니다!"
+            if interaction: await interaction.response.send_message(response_msg, ephemeral=True)
+            elif ctx: await ctx.send(response_msg)
+            elif channel_to_send: await channel_to_send.send(response_msg)
+            return
+
+        try:
+            if interaction and not interaction.response.is_done(): await interaction.response.defer(ephemeral=False)
+            await 유저.kick(reason=사유)
+            response_msg = f"✅ {유저.display_name}님을 강퇴했습니다. 사유: {사유}"
+            if interaction: await interaction.followup.send(response_msg)
+            elif ctx: await ctx.send(response_msg)
+            elif channel_to_send: await channel_to_send.send(response_msg)
+
+            try: await 유저.send(f"🚨 당신은 {target_guild.name} 서버에서 강퇴당했습니다. 사유: {사유}")
+            except discord.Forbidden: print(f"유저 {유저.display_name}에게 DM을 보낼 수 없습니다.")
+        except discord.Forbidden:
+            response_msg = "❌ 봇에게 강퇴 권한이 없거나, 대상 유저의 역할이 봇보다 높습니다。"
+            if interaction: await interaction.followup.send(response_msg, ephemeral=True)
+            elif ctx: await ctx.send(response_msg)
+            elif channel_to_send: await channel_to_send.send(response_msg)
+        except Exception as e:
+            response_msg = f"❌ 킥 실패: {e}"
+            if interaction: await interaction.followup.send(response_msg, ephemeral=True)
+            elif ctx: await ctx.send(response_msg)
+            elif channel_to_send: await channel_to_send.send(response_msg)
+
+    async def _ban_user(self, 유저: discord.Member, 사유: str, 일수: int = 0, interaction: discord.Interaction = None, ctx: commands.Context = None, channel_to_send=None):
+        target_guild = interaction.guild if interaction else ctx.guild
+        target_channel = interaction.channel if interaction else ctx.channel if ctx else channel_to_send
+        caller_obj = interaction if interaction else ctx.author
+
+        if 유저.bot:
+            response_msg = "❌ 봇에게는 밴을 할 수 없습니다!"
+            if interaction: await interaction.response.send_message(response_msg, ephemeral=True)
+            elif ctx: await ctx.send(response_msg)
+            elif channel_to_send: await channel_to_send.send(response_msg)
+            return
+
+        if 유저.top_role >= target_guild.me.top_role:
+            response_msg = "❌ 저보다 높은 역할의 유저는 밴할 수 없습니다!"
+            if interaction: await interaction.response.send_message(response_msg, ephemeral=True)
+            elif ctx: await ctx.send(response_msg)
+            elif channel_to_send: await channel_to_send.send(response_msg)
+            return
+
+        caller_member = interaction.user if interaction else ctx.author
+        if 유저.top_role >= caller_member.top_role and not caller_member.guild_permissions.administrator:
+            response_msg = "❌ 당신보다 높은 역할의 유저는 밴할 수 없습니다!"
+            if interaction: await interaction.response.send_message(response_msg, ephemeral=True)
+            elif ctx: await ctx.send(response_msg)
+            elif channel_to_send: await channel_to_send.send(response_msg)
+            return
+
+        try:
+            if interaction and not interaction.response.is_done(): await interaction.response.defer(ephemeral=False)
+            await 유저.ban(reason=사유, delete_message_days=일수)
+            response_msg = f"✅ {유저.display_name}님을 추방했습니다. 사유: {사유}, 메시지 삭제 일수: {일수}일"
+            if interaction: await interaction.followup.send(response_msg)
+            elif ctx: await ctx.send(response_msg)
+            elif channel_to_send: await channel_to_send.send(response_msg)
+            try: await 유저.send(f"🚨 당신은 {target_guild.name} 서버에서 추방당했습니다. 사유: {사유}")
+            except discord.Forbidden: print(f"유저 {유저.display_name}에게 DM을 보낼 수 없습니다.")
+        except discord.Forbidden:
+            response_msg = "❌ 봇에게 추방 권한이 없거나, 대상 유저의 역할이 봇보다 높습니다。"
+            if interaction: await interaction.followup.send(response_msg, ephemeral=True)
+            elif ctx: await ctx.send(response_msg)
+            elif channel_to_send: await channel_to_send.send(response_msg)
+        except Exception as e:
+            response_msg = f"❌ 밴 실패: {e}"
+            if interaction: await interaction.followup.send(response_msg, ephemeral=True)
+            elif ctx: await ctx.send(response_msg)
+            elif channel_to_send: await channel_to_send.send(response_msg)
+
+    async def _clear_messages(self, 개수: int, interaction: discord.Interaction = None, ctx: commands.Context = None, channel_to_send=None):
+        target_channel = interaction.channel if interaction else ctx.channel if ctx else channel_to_send
+        # 권한 체크는 데코레이터에서 수행
+
+        try:
+            if interaction and not interaction.response.is_done(): await interaction.response.defer(ephemeral=True)
+            deleted = await target_channel.purge(limit=개수)
+            response_msg = f"✅ 메시지 {len(deleted)}개를 삭제했습니다。"
+            if interaction: await interaction.followup.send(response_msg, ephemeral=True)
+            elif ctx: await ctx.send(response_msg)
+            elif channel_to_send: await channel_to_send.send(response_msg)
+        except discord.Forbidden:
+            response_msg = "❌ 봇에게 메시지 관리 권한이 없습니다。"
+            if interaction: await interaction.followup.send(response_msg, ephemeral=True)
+            elif ctx: await ctx.send(response_msg)
+            elif channel_to_send: await channel_to_send.send(response_msg)
+        except Exception as e:
+            response_msg = f"❌ 청소 실패: {e}"
+            if interaction: await interaction.followup.send(response_msg, ephemeral=True)
+            elif ctx: await ctx.send(response_msg)
+            elif channel_to_send: await channel_to_send.send(response_msg)
+
+    async def _manage_role(self, 유저: discord.Member, 역할: discord.Role, action: str, interaction: discord.Interaction = None, ctx: commands.Context = None, channel_to_send=None):
+        target_guild = interaction.guild if interaction else ctx.guild
+        target_channel = interaction.channel if interaction else ctx.channel if ctx else channel_to_send
+        # 권한 체크는 데코레이터에서 수행
+
+        if 역할 >= target_guild.me.top_role:
+            response_msg = "❌ 저보다 높은 역할은 부여/삭제할 수 없습니다!"
+            if interaction: await interaction.response.send_message(response_msg, ephemeral=True)
+            elif ctx: await ctx.send(response_msg)
+            elif channel_to_send: await channel_to_send.send(response_msg)
+            return
+
+        caller_member = interaction.user if interaction else ctx.author
+        if 유저.top_role >= caller_member.top_role and not caller_member.guild_permissions.administrator:
+            response_msg = "❌ 당신보다 높은 역할은 부여/삭제할 수 없습니다!"
+            if interaction: await interaction.response.send_message(response_msg, ephemeral=True)
+            elif ctx: await ctx.send(response_msg)
+            elif channel_to_send: await channel_to_send.send(response_msg)
+            return
+
+        try:
+            if interaction and not interaction.response.is_done(): await interaction.response.defer(ephemeral=False)
+            if action == 'add':
+                await 유저.add_roles(역할)
+                response_msg = f"✅ {유저.display_name}님에게 '{역할.name}' 역할을 부여했습니다。"
+            else:
+                await 유저.remove_roles(역할)
+                response_msg = f"✅ {유저.display_name}님에게서 '{역할.name}' 역할을 삭제했습니다。"
+
+            if interaction: await interaction.followup.send(response_msg)
+            elif ctx: await ctx.send(response_msg)
+            elif channel_to_send: await channel_to_send.send(response_msg)
+
+        except discord.Forbidden:
+            response_msg = "❌ 봇에게 역할 관리 권한이 없거나, 대상 역할의 위치가 봇보다 높습니다。"
+            if interaction: await interaction.followup.send(response_msg, ephemeral=True)
+            elif ctx: await ctx.send(response_msg)
+            elif channel_to_send: await channel_to_send.send(response_msg)
+        except Exception as e:
+            response_msg = f"❌ 역할 관리 실패: {e}"
+            if interaction: await interaction.followup.send(response_msg, ephemeral=True)
+            elif ctx: await ctx.send(response_msg)
+            elif channel_to_send: await channel_to_send.send(response_msg)
+
+async def _warn_user(self, 유저: discord.Member, 사유: str, interaction: discord.Interaction = None, ctx: commands.Context = None, channel_to_send=None):
+    """유저에게 경고를 부여합니다."""
+    target_guild = interaction.guild if interaction else ctx.guild
+    target_channel = interaction.channel if interaction else ctx.channel if ctx else channel_to_send
+    # 권한 체크는 데코레이터에서 수행
+
+    if 유저.bot:
+        response_msg = "❌ 봇에게는 경고를 줄 수 없습니다!"
+        if interaction: await interaction.response.send_message(response_msg, ephemeral=True)
+        elif ctx: await ctx.send(response_msg)
+        elif channel_to_send: await channel_to_send.send(response_msg)
+        return
+
+    if 유저.id == (interaction.user.id if interaction else ctx.author.id):
+        response_msg = "❌ 자기 자신에게 경고를 줄 순 없습니다!"
+        if interaction: await interaction.response.send_message(response_msg, ephemeral=True)
+        elif ctx: await ctx.send(response_msg)
+        elif channel_to_send: await channel_to_send.send(response_msg)
+        return
+
+    caller_member = interaction.user if interaction else ctx.author
+    if 유저.top_role >= caller_member.top_role and not caller_member.guild_permissions.administrator:
+        response_msg = "❌ 당신보다 높은 역할의 유저는 경고할 수 없습니다!"
+        if interaction: await interaction.response.send_message(response_msg, ephemeral=True)
+        elif ctx: await ctx.send(response_msg)
+        elif channel_to_send: await channel_to_send.send(response_msg)
+        return
+
+    conn = self.get_db_connection()
+    cursor = conn.cursor()
+    user_id_str = str(유저.id)
+
+    cursor.execute(\"\"\"
+        INSERT INTO user_warnings (user_id, username, reason, moderator_id, moderator_name, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?)
+    \"\"\", (user_id_str, 유저.display_name, 사유, str(caller_member.id), caller_member.display_name, datetime.datetime.now(datetime.UTC).isoformat()))
+    conn.commit()
+
+    cursor.execute("SELECT COUNT(*) FROM user_warnings WHERE user_id = ?", (user_id_str,))
+    warning_count = cursor.fetchone()[0]
+    conn.close()
+
+    warn_embed = discord.Embed(
+        title="🚨 경고 알림",
+        description=f"{유저.mention}님이 경고를 받았습니다.",
+        color=discord.Color.red()
+    )
+    warn_embed.add_field(name="사유", value=사유, inline=False)
+    warn_embed.add_field(name="경고 횟수", value=f"총 **{warning_count}회**", inline=False)
+    warn_embed.set_footer(text=f"관리자: {caller_member.display_name}")
+
+    if interaction and not interaction.response.is_done(): await interaction.response.send_message(embed=warn_embed)
+    elif ctx: await ctx.send(embed=warn_embed)
+    try:
+        await 유저.send(f"🚨 당신은 {target_guild.name} 서버에서 경고를 받았습니다. 사유: {사유}\n총 경고 횟수: {warning_count}회")
+    except discord.Forbidden:
+        print(f"유저 {유저.display_name}에게 DM을 보낼 수 없습니다.")
+
+    server_config = self.bot.get_server_config(target_guild.id)
+    auto_kick_warn_count = server_config.get('auto_kick_warn_count', 5)
+
+    if warning_count >= auto_kick_warn_count:
+        try:
+            await 유저.kick(reason=f"경고 {auto_kick_warn_count}회 누적으로 자동 강퇴")
+            if target_channel: await target_channel.send(f"⚠️ {유저.mention}님이 경고 누적({auto_kick_warn_count}회)으로 서버에서 자동 강퇴되었습니다.")
+        except discord.Forbidden:
+            if target_channel: await target_channel.send(f"⚠️ {유저.mention}님이 경고 누적({auto_kick_warn_count}회)으로 자동 강퇴 대상이지만, 봇의 권한 부족으로 강퇴하지 못했습니다.")
+        except Exception as e:
+            print(f"자동 강퇴 처리 중 오류 발생: {e}")
+            if target_channel: await target_channel.send(f"⚠️ {유저.mention}님 자동 강퇴 처리 중 오류 발생: {e}")
+
+
+async def _check_warnings(self, 유저: discord.Member, interaction: discord.Interaction = None, ctx: commands.Context = None, channel_to_send=None):
+    """유저의 경고 내역을 조회합니다."""
+    target_channel = interaction.channel if interaction else ctx.channel if ctx else channel_to_send
+    # 권한 체크는 데코레이터에서 수행
+
+    conn = self.get_db_connection()
+    cursor = conn.cursor()
+    user_id_str = str(유저.id)
+    cursor.execute("SELECT reason, moderator_name, timestamp FROM user_warnings WHERE user_id = ? ORDER BY timestamp ASC LIMIT 10", (user_id_str,))
+    warnings = cursor.fetchall()
+    conn.close()
+
+    if not warnings:
+        response_msg = f"❌ {유저.display_name}님은 경고 내역이 없습니다!"
+        if interaction: await interaction.response.send_message(response_msg, ephemeral=True)
+        elif ctx: await ctx.send(response_msg)
+        elif channel_to_send: await channel_to_send.send(response_msg)
+        return
+
+    warn_list_str = ""
+    for i, w in enumerate(warnings):
+        warn_time = datetime.datetime.fromisoformat(w['timestamp']).strftime('%Y-%m-%d')
+        warn_list_str += f"{i+1}. 사유: {w['reason']} (관리자: {w['moderator_name']}, 날짜: {warn_time})\n"
+
+    embed = discord.Embed(
+        title=f"⚠️ {유저.display_name}님의 경고 내역 (총 {len(warnings)}회)",
+        description=warn_list_str,
+        color=discord.Color.orange()
+    )
+    if interaction and not interaction.response.is_done(): await interaction.response.send_message(embed=embed, ephemeral=True)
+    elif ctx: await ctx.send(embed=embed)
+    elif channel_to_send: await channel_to_send.send(embed=embed)
+
+async def _remove_warning(self, 유저: discord.Member, 인덱스: str, 사유: str, interaction: discord.Interaction = None, ctx: commands.Context = None, channel_to_send=None):
+    """유저의 경고를 삭제합니다."""
+    target_guild = interaction.guild if interaction else ctx.guild
+    target_channel = interaction.channel if interaction else ctx.channel if ctx else channel_to_send
+    # 권한 체크는 데코레이터에서 수행
+
+    conn = self.get_db_connection()
+    cursor = conn.cursor()
+    user_id_str = str(유저.id)
+
+    if 인덱스.lower() == "모두":
+        cursor.execute("DELETE FROM user_warnings WHERE user_id = ?", (user_id_str,))
+        conn.commit()
+        conn.close()
+        response_msg = f"✅ {유저.display_name}님의 모든 경고를 삭제했습니다. 사유: {사유}"
+        if interaction: await interaction.response.send_message(response_msg)
+        elif ctx: await ctx.send(response_msg)
+        elif channel_to_send: await channel_to_send.send(response_msg)
+    else:
+        try:
+            idx = int(인덱스) - 1
+            cursor.execute("SELECT id FROM user_warnings WHERE user_id = ? ORDER BY timestamp ASC LIMIT 1 OFFSET ?", (user_id_str, idx))
+            warning_to_delete = cursor.fetchone()
+
+            if warning_to_delete:
+                cursor.execute("DELETE FROM user_warnings WHERE id = ?", (warning_to_delete['id'],))
+                conn.commit()
+                conn.close()
+                response_msg = f"✅ {유저.display_name}님의 {idx+1}번째 경고를 삭제했습니다. 사유: {사유}"
+                if interaction: await interaction.response.send_message(response_msg)
+                elif ctx: await ctx.send(response_msg)
+                elif channel_to_send: await channel_to_send.send(response_msg)
+            else:
+                conn.close()
+                response_msg = "❌ 유효하지 않은 경고 번호입니다!"
+                if interaction: await interaction.response.send_message(response_msg, ephemeral=True)
+                elif ctx: await ctx.send(response_msg)
+                elif channel_to_send: await channel_to_send.send(response_msg)
+
+async def _open_ticket(self, user: discord.User, guild: discord.Guild, current_channel: discord.TextChannel, 사유: str, interaction: discord.Interaction = None, ctx: commands.Context = None):
+    target_guild = guild
+
+    server_config = self.bot.get_server_config(target_guild.id)
+    if not server_config:
+        response_msg = "❌ 이 서버의 봇 설정이 완료되지 않았습니다. 관리자에게 문의하여 `/설정` 명령어를 사용해 필요한 채널과 역할을 설정해달라고 요청하세요。"
+        if interaction: await interaction.response.send_message(response_msg, ephemeral=True)
+        elif ctx: await ctx.send(response_msg)
+        return
+
+    ticket_open_channel_id = server_config.get('ticket_open_channel_id')
+    ticket_category_id = server_config.get('ticket_category_id')
+    ticket_staff_role_id = server_config.get('ticket_staff_role_id')
+
+    if not all([ticket_open_channel_id, ticket_category_id, ticket_staff_role_id]):
+        response_msg = (
+            "❌ 티켓 기능의 필수 설정(티켓 개설 채널, 티켓 카테고리, 티켓 관리 역할)이 완료되지 않았습니다. "
+            "관리자에게 문의하여 `/설정` 명령어를 사용해 필요한 채널과 역할을 설정해달라고 요청하세요。"
+        )
+        if interaction: await interaction.response.send_message(response_msg, ephemeral=True)
+        elif ctx: await ctx.send(response_msg)
+        return
+
+    if str(current_channel.id) != ticket_open_channel_id:
+        ticket_channel_obj = self.bot.get_channel(int(ticket_open_channel_id))
+        response_msg = f"❌ 티켓은 {ticket_channel_obj.mention if ticket_channel_obj else '설정된 티켓 개설 채널'}에서만 열 수 있습니다。"
+        if interaction: await interaction.response.send_message(response_msg, ephemeral=True)
+        elif ctx: await ctx.send(response_msg)
+        return
+
+    conn = self.get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT channel_id FROM tickets WHERE user_id = ? AND status = 'open'", (str(user.id),))
+    if cursor.fetchone():
+        conn.close()
+        response_msg = "❌ 이미 열려있는 티켓이 있습니다. 먼저 기존 티켓을 닫아주세요。"
+        if interaction: await interaction.response.send_message(response_msg, ephemeral=True)
+        elif ctx: await ctx.send(response_msg)
+        return
+
+    overwrites = {
+        target_guild.default_role: discord.PermissionOverwrite(read_messages=False),
+        user: discord.PermissionOverwrite(read_messages=True, send_messages=True, embed_links=True),
+        target_guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True, embed_links=True)
+    }
+    staff_role_obj = target_guild.get_role(int(ticket_staff_role_id))
+    if staff_role_obj:
+        overwrites[staff_role_obj] = discord.PermissionOverwrite(read_messages=True, send_messages=True, embed_links=True)
+
+    category_obj = self.bot.get_channel(int(ticket_category_id))
+    if not category_obj or not isinstance(category_obj, discord.CategoryChannel):
+        response_msg = "❌ 설정된 티켓 카테고리를 찾을 수 없습니다. 관리자에게 문의하세요。"
+        if interaction: await interaction.response.send_message(response_msg, ephemeral=True)
+        elif ctx: await ctx.send(response_msg)
+        return
+
+    try:
+        if interaction and not interaction.response.is_done(): await interaction.response.defer(ephemeral=True)
+        ticket_channel_name = f"티켓-{user.name.lower().replace(' ', '-')}-{datetime.datetime.now(datetime.UTC).strftime('%m%d%H%M')}"
+        channel = await target_guild.create_text_channel(
+            ticket_channel_name,
+            category=category_obj,
+            overwrites=overwrites,
+            topic=f"{user.name}님이 개설한 티켓입니다. 사유: {사유}"
+        )
+
+        cursor.execute(\"\"\"
+            INSERT INTO tickets (user_id, username, guild_id, channel_id, status, reason, opened_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        \"\"\", (str(user.id), user.display_name, str(target_guild.id), str(channel.id), "open", 사유, datetime.datetime.now(datetime.UTC).isoformat()))
+        ticket_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+
+        ticket_embed = discord.Embed(
+            title=f"🔒 티켓 #{ticket['id']}이(가) 닫혔습니다。",
+            description=f"티켓이 {user.mention}에 의해 닫혔습니다。\n**사유:** {사유}",
+            color=discord.Color.red()
+        )
+        embed.set_footer(text="이 채널은 잠시 후 자동으로 삭제됩니다。")
+        await target_channel.send(embed=embed)
+
+        response_msg = f"✅ 티켓이 성공적으로 닫혔습니다. 채널은 잠시 후 삭제됩니다。"
+        if interaction: await interaction.followup.send(response_msg, ephemeral=True)
+        elif ctx: await ctx.send(response_msg)
+
+        await asyncio.sleep(5)
+        await target_channel.delete(reason=f"티켓 #{ticket['id']} 닫힘。")
+
+    except discord.Forbidden:
+        response_msg = "❌ 채널을 삭제할 권한이 없습니다. 봇의 권한을 확인해주세요。"
+        if interaction: await interaction.followup.send(response_msg, ephemeral=True)
+        elif ctx: await ctx.send(response_msg)
+    except Exception as e:
+        print(f"티켓 닫기 중 오류 발생: {e}")
+        response_msg = f"❌ 티켓 닫기 중 알 수 없는 오류가 발생했습니다: {e}"
+        if interaction: await interaction.followup.send(response_msg, ephemeral=True)
+        elif ctx: await ctx.send(response_msg)
+
+async def _show_bot_status(self, user: discord.User, channel: discord.TextChannel, interaction: discord.Interaction = None, ctx: commands.Context = None):
+    if interaction: await interaction.response.defer(ephemeral=False)
+
+    settings = self.bot.get_bot_presence_settings()
+    if not settings:
+        response_msg = "❌ 봇 상태 설정 정보를 불러올 수 없습니다. 관리자에게 문의하세요。"
+        if interaction: await interaction.followup.send(response_msg, ephemeral=True)
+        elif ctx: await ctx.send(response_msg)
+        return
+
+    status_display_map = {
+        'online': '🟢 온라인',
+        'idle': '🟠 자리 비움',
+        'dnd': '🔴 방해 금지',
+        'invisible': '⚫ 오프라인 표시'
+    }
+    activity_type_map = {
+        'playing': '🎮 플레이 중',
+        'streaming': '📺 스트리밍 중',
+        'listening': '🎧 듣는 중',
+        'watching': '🎬 시청 중'
+    }
+
+    embed = discord.Embed(
+        title=f"✨ {self.bot.BOT_NAME} 현재 상태", # 🚩 이름 사용
+        description=f"현재 {self.bot.BOT_NAME}의 상태와 활동 정보입니다。", # 🚩 이름 사용
+        color=discord.Color.blurple()
+    )
+    embed.add_field(name="상태", value=status_display_map.get(settings['status'], '알 수 없음'), inline=False)
+    embed.add_field(name="활동", value=f"{activity_type_map.get(settings['activity_type'], '알 수 없음')}: {settings['activity_name']}", inline=False)
+    embed.set_footer(text=f"최종 업데이트: {datetime.datetime.now(datetime.UTC).strftime('%Y-%m-%d %H:%M:%S')} (UTC)")
+
+    if interaction: await interaction.followup.send(embed=embed)
+    elif ctx: await ctx.send(embed=embed)
+
+async def _scan_blacklist_user(self, 유저: discord.Member, interaction: discord.Interaction = None, ctx: commands.Context = None, channel_to_send=None):
+    target_channel = interaction.channel if interaction else ctx.channel if ctx else channel_to_send
+    # 권한 체크는 데코레이터에서 수행
+
+    conn = self.get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id, reason FROM global_blacklist WHERE user_id = ?", (str(유저.id),))
+    result = cursor.fetchone()
+    conn.close()
+
+    if result:
+        response_msg = f"🚨 **{유저.display_name}**님은 글로벌 블랙리스트에 등록된 악성 유저입니다!\n사유: {result['reason']}"
+        embed = discord.Embed(
+            title="⚠️ 블랙리스트 스캔 결과",
+            description=response_msg,
+            color=discord.Color.red()
+        )
+        if interaction: await interaction.response.send_message(embed=embed, ephemeral=False)
+        elif ctx: await ctx.send(embed=embed)
+        elif channel_to_send: await channel_to_send.send(embed=embed)
+    else:
+        response_msg = f"✅ **{유저.display_name}**님은 글로벌 블랙리스트에 없습니다。"
+        if interaction: await interaction.response.send_message(response_msg, ephemeral=False)
+        elif ctx: await ctx.send(response_msg)
+        elif channel_to_send: await channel_to_send.send(response_msg)
+
+async def _security_report(self, interaction: discord.Interaction = None, ctx: commands.Context = None, channel_to_send=None):
+    target_guild = interaction.guild if interaction else ctx.guild
+    target_channel = interaction.channel if interaction else ctx.channel if ctx else channel_to_send
+    # 권한 체크는 데코레이터에서 수행
+
+    server_config = self.bot.get_server_config(target_guild.id)
+    if not server_config:
+        response_msg = "❌ 이 서버에 저장된 봇 보안 설정이 없습니다. 기본 설정이 적용 중일 수 있습니다。"
+        if interaction: await interaction.response.send_message(response_msg, ephemeral=True)
+        elif ctx: await ctx.send(response_msg)
+        elif channel_to_send: await channel_to_send.send(response_msg)
+        return
+
+    invite_filter_status = "활성화 ✅" if server_config.get('invite_filter_enabled', 0) == 1 else "비활성화 ❌"
+    spam_filter_status = "활성화 ✅" if server_config.get('spam_filter_enabled', 0) == 1 else "비활성화 ❌"
+    spam_threshold = server_config.get('spam_threshold', 5)
+    spam_time_window = server_config.get('spam_time_window', 10)
+
+    embed = discord.Embed(
+        title=f"🛡️ {target_guild.name} 서버 보안 리포트",
+        description=f"현재 서버에 적용된 {self.bot.BOT_NAME} 보안 설정입니다。", # 🚩 봇 이름 사용
+        color=discord.Color.dark_teal()
+    )
+    embed.add_field(name="초대 링크 검열", value=invite_filter_status, inline=False)
+    embed.add_field(name="도배 감지", value=spam_filter_status, inline=False)
+    if server_config.get('spam_filter_enabled', 0) == 1:
+        embed.add_field(name="└ 도배 기준", value=f"{spam_threshold} 메시지/{spam_time_window}초", inline=False)
+
+    conn = self.get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM user_warnings")
+    total_warnings = cursor.fetchone()[0]
+    embed.add_field(name="누적 경고 수 (봇 전체)", value=f"총 {total_warnings}회", inline=False)
+    conn.close()
+
+    if interaction: await interaction.response.send_message(embed=embed, ephemeral=False)
+    elif ctx: await ctx.send(embed=embed)
+    elif channel_to_send: await channel_to_send.send(embed=embed)
+
+async def _list_commands_report(self, guild: discord.Guild, channel: discord.TextChannel, interaction: discord.Interaction = None, ctx: commands.Context = None):
+    if interaction: await interaction.response.defer(ephemeral=False)
+
+    server_config = self.bot.get_server_config(guild.id)
+    bank_channel_id = server_config.get('bank_channel_id')
+
+    all_commands = []
+    for cmd in self.bot.commands:
+        all_commands.append(cmd.name)
+    for cmd in self.bot.tree.walk_commands():
+        all_commands.append(cmd.qualified_name)
+    all_commands = sorted(list(set(all_commands)))
+
+    commands_categorized = {
+        "일반 명령어": [],
+        "은행 명령어": [],
+        "차량 명령어": [],
+        "관리 명령어": [],
+        "티켓 명령어": [],
+        "음악 명령어": [],
+        "게임 명령어": [],
+        "보안 명령어": [],
+        "설정 명령어": [],
+        "복구 명령어": []
+    }
+
+    for cmd_name in all_commands:
+        is_enabled_in_settings = self.bot.is_command_enabled(guild.id, cmd_name)
+        status_icon = "✅" if is_enabled_in_settings else "❌"
+
+        slash_display = f"/{cmd_name}" if self.bot.tree.get_command(cmd_name) else ""
+        msg_cmd_obj = self.bot.get_command(cmd_name)
+        msg_display = f"{self.bot.command_prefix}{cmd_name}" if msg_cmd_obj else ""
+
+        display_name = ""
+        if slash_display and msg_display: display_name = f"{slash_display} | {msg_display}"
+        elif slash_display: display_name = slash_display
+        elif msg_display: display_name = msg_display
+        else: continue
+
+        command_info = {"name": display_name, "status": status_icon, "available_in_this_channel": True}
+
+        if "은행" in cmd_name or cmd_name in ["통장개설", "잔액", "입금", "출금", "송금", "대출", "상환", "거래내역"]:
+            if bank_channel_id and str(channel.id) != bank_channel_id:
+                command_info["available_in_this_channel"] = False
+            commands_categorized["은행 명령어"].append(command_info)
+        elif "차량" in cmd_name or cmd_name in ["차량등록"]:
+            commands_categorized["차량 명령어"].append(command_info)
+        elif "킥" in cmd_name or "밴" in cmd_name or "청소" in cmd_name or "역할" in cmd_name or "경고" in cmd_name:
+            commands_categorized["관리 명령어"].append(command_info)
+        elif "티켓" in cmd_name:
+            commands_categorized["티켓 명령어"].append(command_info)
+        elif "들어와" in cmd_name or "나가" in cmd_name or "재생" in cmd_name or "정지" in cmd_name:
+            commands_categorized["음악 명령어"].append(command_info)
+        elif "주사위" in cmd_name or "가위바위보" in cmd_name:
+            commands_categorized["게임 명령어"].append(command_info)
+        elif "스캔블랙리스트" in cmd_name or "보안리포트" in cmd_name or "초대링크검열" in cmd_name or "도배감

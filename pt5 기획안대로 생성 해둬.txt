@@ -1,0 +1,2112 @@
+# 2.8. cogs/youtube_tracker.py (파이썬 봇용)
+def get_youtube_tracker_py_content(bot_name):
+    return f"""
+import discord
+from discord.ext import commands, tasks
+import json
+import datetime
+from googleapiclient.discovery import build # 🚩 build 임포트
+import asyncio
+
+class YouTubeTracker(commands.Cog):
+    def __init__(self, bot):
+        self.bot = bot
+        self.get_server_config = bot.get_server_config
+        self.youtube_service = bot.youtube_service # bot.py에서 주입된 YouTube 서비스 객체
+
+        # 🚩 YouTube API 키가 없으면 기능 비활성화
+        if not self.youtube_service:
+            print("⚠️ YouTube Data API 서비스가 초기화되지 않았습니다. YouTubeTracker 기능을 비활성화합니다.")
+            return
+
+        self.last_checked = {{}} # {{guild_id: {{channel_id: last_video_publish_time}}}}
+        self.check_youtube_channels.start()
+
+    def cog_unload(self):
+        \"\"\"코그 언로드 시 작업 중지.\"\"\"
+        self.check_youtube_channels.cancel()
+
+    @tasks.loop(minutes=10) # 🚩 10분마다 유튜브 채널 확인 (API 호출 제한 고려)
+    async def check_youtube_channels(self):
+        await self.bot.wait_until_ready() # 봇 준비될 때까지 대기
+
+        # 🚩 server_configs 테이블에서 유튜브 활동이 활성화된 모든 서버 정보 가져오기 (SQLite 사용)
+        conn = self.bot.get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT guild_id, youtube_activity_enabled, youtube_channel_ids_json, youtube_notification_channel_id FROM server_configs WHERE youtube_activity_enabled = 1")
+        active_youtube_configs = cursor.fetchall()
+        conn.close()
+
+        if not self.youtube_service:
+            print("❌ YouTube Data API 서비스가 없습니다. 유튜브 활동을 확인할 수 없습니다.")
+            return
+
+        for config in active_youtube_configs:
+            guild_id = config['guild_id']
+            youtube_channel_ids = json.loads(config['youtube_channel_ids_json'])
+            notification_channel_id = config['youtube_notification_channel_id']
+
+            if not notification_channel_id:
+                print(f"⚠️ 서버 {{guild_id}}: 유튜브 알림 채널이 설정되지 않았습니다.")
+                continue
+
+            notification_channel = self.bot.get_channel(int(notification_channel_id))
+            if not notification_channel:
+                print(f"⚠️ 서버 {{guild_id}}: 알림 채널을 찾을 수 없습니다. (ID: {{notification_channel_id}})")
+                continue
+
+            for yt_channel_id in youtube_channel_ids:
+                try:
+                    # 채널의 최신 비디오 정보 가져오기
+                    request = self.youtube_service.channels().list(
+                        part="contentDetails",
+                        id=yt_channel_id
+                    )
+                    response = request.execute()
+
+                    # 업로드 플레이리스트 ID 가져오기
+                    uploads_playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
+
+                    playlist_request = self.youtube_service.playlistItems().list(
+                        part="snippet",
+                        playlistId=uploads_playlist_id,
+                        maxResults=1 # 최신 비디오 1개만 가져옴
+                    )
+                    playlist_response = playlist_request.execute()
+
+                    if not playlist_response['items']:
+                        continue # 비디오가 없는 채널
+
+                    latest_video = playlist_response['items'][0]['snippet']
+                    video_id = latest_video['resourceId']['videoId']
+                    video_title = latest_video['title']
+                    publish_time_str = latest_video['publishedAt']
+
+                    # ISO 8601 문자열을 datetime 객체로 변환
+                    publish_time = datetime.datetime.fromisoformat(publish_time_str.replace('Z', '+00:00'))
+
+                    # 🚩 이 채널(yt_channel_id)의 마지막 확인 시간 가져오기
+                    last_published = self.last_checked.get(guild_id, {{}}).get(yt_channel_id)
+
+                    if last_published and publish_time <= last_published:
+                        continue # 이미 알림 보냈거나 더 오래된 비디오
+
+                    # 새 비디오 감지: 알림 보내기
+                    video_url = f"https://www.youtube.com/watch?v={{video_id}}"
+                    channel_title = latest_video['channelTitle']
+
+                    embed = discord.Embed(
+                        title=f"🎬 새로운 영상 업로드!",
+                        description=f"[{video_title}]({{video_url}})",
+                        color=discord.Color.red()
+                    )
+                    embed.set_author(name=channel_title, url=f"https://www.youtube.com/channel/{{yt_channel_id}}")
+                    embed.set_thumbnail(url=latest_video['thumbnails']['high']['url'])
+                    embed.set_footer(text=f"업로드됨: {publish_time.strftime('%Y년 %m월 %d일 %H시 %M분')}")
+
+                    await notification_channel.send(embed=embed)
+                    print(f"✅ 서버 {{guild_id}}: 유튜브 알림 전송 완료 - {{video_title}}")
+
+                    # 🚩 마지막 확인 시간 업데이트
+                    if guild_id not in self.last_checked:
+                        self.last_checked[guild_id] = {{}}
+                    self.last_checked[guild_id][yt_channel_id] = publish_time
+
+                except Exception as e:
+                    print(f"❌ 서버 {{guild_id}}, 유튜브 채널 {{yt_channel_id}} 확인 중 오류 발생: {{e}}")
+
+    @tasks.loop(minutes=10) # 🚩 10분마다 유튜브 채널 확인 (API 호출 제한 고려)
+    async def check_youtube_channels(self):
+        await self.bot.wait_until_ready() # 봇 준비될 때까지 대기
+
+        # 🚩 server_configs 테이블에서 유튜브 활동이 활성화된 모든 서버 정보 가져오기 (SQLite 사용)
+        conn = self.bot.get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT guild_id, youtube_activity_enabled, youtube_channel_ids_json, youtube_notification_channel_id FROM server_configs WHERE youtube_activity_enabled = 1")
+        active_youtube_configs = cursor.fetchall()
+        conn.close()
+
+        if not self.youtube_service:
+            print("❌ YouTube Data API 서비스가 없습니다. 유튜브 활동을 확인할 수 없습니다.")
+            return
+
+        for config in active_youtube_configs:
+            guild_id = config['guild_id']
+            youtube_channel_ids = json.loads(config['youtube_channel_ids_json'])
+            notification_channel_id = config['youtube_notification_channel_id']
+
+            if not notification_channel_id:
+                print(f"⚠️ 서버 {{guild_id}}: 유튜브 알림 채널이 설정되지 않았습니다.")
+                continue
+
+            notification_channel = self.bot.get_channel(int(notification_channel_id))
+            if not notification_channel:
+                print(f"⚠️ 서버 {{guild_id}}: 알림 채널을 찾을 수 없습니다. (ID: {{notification_channel_id}})")
+                continue
+
+            for yt_channel_id in youtube_channel_ids:
+                try:
+                    # 채널의 최신 비디오 정보 가져오기
+                    request = self.youtube_service.channels().list(
+                        part="contentDetails",
+                        id=yt_channel_id
+                    )
+                    response = request.execute()
+
+                    # 업로드 플레이리스트 ID 가져오기
+                    uploads_playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
+
+                    playlist_request = self.youtube_service.playlistItems().list(
+                        part="snippet",
+                        playlistId=uploads_playlist_id,
+                        maxResults=1 # 최신 비디오 1개만 가져옴
+                    )
+                    playlist_response = playlist_request.execute()
+
+                    if not playlist_response['items']:
+                        continue # 비디오가 없는 채널
+
+                    latest_video = playlist_response['items'][0]['snippet']
+                    video_id = latest_video['resourceId']['videoId']
+                    video_title = latest_video['title']
+                    publish_time_str = latest_video['publishedAt']
+
+                    # ISO 8601 문자열을 datetime 객체로 변환
+                    publish_time = datetime.datetime.fromisoformat(publish_time_str.replace('Z', '+00:00'))
+
+                    # 🚩 이 채널(yt_channel_id)의 마지막 확인 시간 가져오기
+                    last_published = self.last_checked.get(guild_id, {{}}).get(yt_channel_id)
+
+                    if last_published and publish_time <= last_published:
+                        continue # 이미 알림 보냈거나 더 오래된 비디오
+
+                    # 새 비디오 감지: 알림 보내기
+                    video_url = f"https://www.youtube.com/watch?v={{video_id}}"
+                    channel_title = latest_video['channelTitle']
+
+                    embed = discord.Embed(
+                        title=f"🎬 새로운 영상 업로드!",
+                        description=f"[{video_title}]({{video_url}})",
+                        color=discord.Color.red()
+                    )
+                    embed.set_author(name=channel_title, url=f"https://www.youtube.com/channel/{{yt_channel_id}}")
+                    embed.set_thumbnail(url=latest_video['thumbnails']['high']['url'])
+                    embed.set_footer(text=f"업로드됨: {publish_time.strftime('%Y년 %m월 %d일 %H시 %M분')}")
+
+                    await notification_channel.send(embed=embed)
+                    print(f"✅ 서버 {{guild_id}}: 유튜브 알림 전송 완료 - {{video_title}}")
+
+                    # 🚩 마지막 확인 시간 업데이트
+                    if guild_id not in self.last_checked:
+                        self.last_checked[guild_id] = {{}}
+                    self.last_checked[guild_id][yt_channel_id] = publish_time
+
+                except Exception as e:
+                    print(f"❌ 서버 {{guild_id}}, 유튜브 채널 {{yt_channel_id}} 확인 중 오류 발생: {{e}}")
+
+    @tasks.loop(minutes=10) # 🚩 10분마다 유튜브 채널 확인 (API 호출 제한 고려)
+    async def check_youtube_channels(self):
+        await self.bot.wait_until_ready() # 봇 준비될 때까지 대기
+
+        # 🚩 server_configs 테이블에서 유튜브 활동이 활성화된 모든 서버 정보 가져오기 (SQLite 사용)
+        conn = self.bot.get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT guild_id, youtube_activity_enabled, youtube_channel_ids_json, youtube_notification_channel_id FROM server_configs WHERE youtube_activity_enabled = 1")
+        active_youtube_configs = cursor.fetchall()
+        conn.close()
+
+        if not self.youtube_service:
+            print("❌ YouTube Data API 서비스가 없습니다. 유튜브 활동을 확인할 수 없습니다.")
+            return
+
+        for config in active_youtube_configs:
+            guild_id = config['guild_id']
+            youtube_channel_ids = json.loads(config['youtube_channel_ids_json'])
+            notification_channel_id = config['youtube_notification_channel_id']
+
+            if not notification_channel_id:
+                print(f"⚠️ 서버 {{guild_id}}: 유튜브 알림 채널이 설정되지 않았습니다.")
+                continue
+
+            notification_channel = self.bot.get_channel(int(notification_channel_id))
+            if not notification_channel:
+                print(f"⚠️ 서버 {{guild_id}}: 알림 채널을 찾을 수 없습니다. (ID: {{notification_channel_id}})")
+                continue
+
+            for yt_channel_id in youtube_channel_ids:
+                try:
+                    # 채널의 최신 비디오 정보 가져오기
+                    request = self.youtube_service.channels().list(
+                        part="contentDetails",
+                        id=yt_channel_id
+                    )
+                    response = request.execute()
+
+                    # 업로드 플레이리스트 ID 가져오기
+                    uploads_playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
+
+                    playlist_request = self.youtube_service.playlistItems().list(
+                        part="snippet",
+                        playlistId=uploads_playlist_id,
+                        maxResults=1 # 최신 비디오 1개만 가져옴
+                    )
+                    playlist_response = playlist_request.execute()
+
+                    if not playlist_response['items']:
+                        continue # 비디오가 없는 채널
+
+                    latest_video = playlist_response['items'][0]['snippet']
+                    video_id = latest_video['resourceId']['videoId']
+                    video_title = latest_video['title']
+                    publish_time_str = latest_video['publishedAt']
+
+                    # ISO 8601 문자열을 datetime 객체로 변환
+                    publish_time = datetime.datetime.fromisoformat(publish_time_str.replace('Z', '+00:00'))
+
+                    # 🚩 이 채널(yt_channel_id)의 마지막 확인 시간 가져오기
+                    last_published = self.last_checked.get(guild_id, {{}}).get(yt_channel_id)
+
+                    if last_published and publish_time <= last_published:
+                        continue # 이미 알림 보냈거나 더 오래된 비디오
+
+                    # 새 비디오 감지: 알림 보내기
+                    video_url = f"https://www.youtube.com/watch?v={{video_id}}"
+                    channel_title = latest_video['channelTitle']
+
+                    embed = discord.Embed(
+                        title=f"🎬 새로운 영상 업로드!",
+                        description=f"[{video_title}]({{video_url}})",
+                        color=discord.Color.red()
+                    )
+                    embed.set_author(name=channel_title, url=f"https://www.youtube.com/channel/{{yt_channel_id}}")
+                    embed.set_thumbnail(url=latest_video['thumbnails']['high']['url'])
+                    embed.set_footer(text=f"업로드됨: {publish_time.strftime('%Y년 %m월 %d일 %H시 %M분')}")
+
+                    await notification_channel.send(embed=embed)
+                    print(f"✅ 서버 {{guild_id}}: 유튜브 알림 전송 완료 - {{video_title}}")
+
+                    # 🚩 마지막 확인 시간 업데이트
+                    if guild_id not in self.last_checked:
+                        self.last_checked[guild_id] = {{}}
+                    self.last_checked[guild_id][yt_channel_id] = publish_time
+
+                except Exception as e:
+                    print(f"❌ 서버 {{guild_id}}, 유튜브 채널 {{yt_channel_id}} 확인 중 오류 발생: {{e}}")
+
+    @tasks.loop(minutes=10) # 🚩 10분마다 유튜브 채널 확인 (API 호출 제한 고려)
+    async def check_youtube_channels(self):
+        await self.bot.wait_until_ready() # 봇 준비될 때까지 대기
+
+        # 🚩 server_configs 테이블에서 유튜브 활동이 활성화된 모든 서버 정보 가져오기 (SQLite 사용)
+        conn = self.bot.get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT guild_id, youtube_activity_enabled, youtube_channel_ids_json, youtube_notification_channel_id FROM server_configs WHERE youtube_activity_enabled = 1")
+        active_youtube_configs = cursor.fetchall()
+        conn.close()
+
+        if not self.youtube_service:
+            print("❌ YouTube Data API 서비스가 없습니다. 유튜브 활동을 확인할 수 없습니다.")
+            return
+
+        for config in active_youtube_configs:
+            guild_id = config['guild_id']
+            youtube_channel_ids = json.loads(config['youtube_channel_ids_json'])
+            notification_channel_id = config['youtube_notification_channel_id']
+
+            if not notification_channel_id:
+                print(f"⚠️ 서버 {{guild_id}}: 유튜브 알림 채널이 설정되지 않았습니다.")
+                continue
+
+            notification_channel = self.bot.get_channel(int(notification_channel_id))
+            if not notification_channel:
+                print(f"⚠️ 서버 {{guild_id}}: 알림 채널을 찾을 수 없습니다. (ID: {{notification_channel_id}})")
+                continue
+
+            for yt_channel_id in youtube_channel_ids:
+                try:
+                    # 채널의 최신 비디오 정보 가져오기
+                    request = self.youtube_service.channels().list(
+                        part="contentDetails",
+                        id=yt_channel_id
+                    )
+                    response = request.execute()
+
+                    # 업로드 플레이리스트 ID 가져오기
+                    uploads_playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
+
+                    playlist_request = self.youtube_service.playlistItems().list(
+                        part="snippet",
+                        playlistId=uploads_playlist_id,
+                        maxResults=1 # 최신 비디오 1개만 가져옴
+                    )
+                    playlist_response = playlist_request.execute()
+
+                    if not playlist_response['items']:
+                        continue # 비디오가 없는 채널
+
+                    latest_video = playlist_response['items'][0]['snippet']
+                    video_id = latest_video['resourceId']['videoId']
+                    video_title = latest_video['title']
+                    publish_time_str = latest_video['publishedAt']
+
+                    # ISO 8601 문자열을 datetime 객체로 변환
+                    publish_time = datetime.datetime.fromisoformat(publish_time_str.replace('Z', '+00:00'))
+
+                    # 🚩 이 채널(yt_channel_id)의 마지막 확인 시간 가져오기
+                    last_published = self.last_checked.get(guild_id, {{}}).get(yt_channel_id)
+
+                    if last_published and publish_time <= last_published:
+                        continue # 이미 알림 보냈거나 더 오래된 비디오
+
+                    # 새 비디오 감지: 알림 보내기
+                    video_url = f"https://www.youtube.com/watch?v={{video_id}}"
+                    channel_title = latest_video['channelTitle']
+
+                    embed = discord.Embed(
+                        title=f"🎬 새로운 영상 업로드!",
+                        description=f"[{video_title}]({{video_url}})",
+                        color=discord.Color.red()
+                    )
+                    embed.set_author(name=channel_title, url=f"https://www.youtube.com/channel/{{yt_channel_id}}")
+                    embed.set_thumbnail(url=latest_video['thumbnails']['high']['url'])
+                    embed.set_footer(text=f"업로드됨: {publish_time.strftime('%Y년 %m월 %d일 %H시 %M분')}")
+
+                    await notification_channel.send(embed=embed)
+                    print(f"✅ 서버 {{guild_id}}: 유튜브 알림 전송 완료 - {{video_title}}")
+
+                    # 🚩 마지막 확인 시간 업데이트
+                    if guild_id not in self.last_checked:
+                        self.last_checked[guild_id] = {{}}
+                    self.last_checked[guild_id][yt_channel_id] = publish_time
+
+                except Exception as e:
+                    print(f"❌ 서버 {{guild_id}}, 유튜브 채널 {{yt_channel_id}} 확인 중 오류 발생: {{e}}")
+
+    @tasks.loop(minutes=10) # 🚩 10분마다 유튜브 채널 확인 (API 호출 제한 고려)
+    async def check_youtube_channels(self):
+        await self.bot.wait_until_ready() # 봇 준비될 때까지 대기
+
+        # 🚩 server_configs 테이블에서 유튜브 활동이 활성화된 모든 서버 정보 가져오기 (SQLite 사용)
+        conn = self.bot.get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT guild_id, youtube_activity_enabled, youtube_channel_ids_json, youtube_notification_channel_id FROM server_configs WHERE youtube_activity_enabled = 1")
+        active_youtube_configs = cursor.fetchall()
+        conn.close()
+
+        if not self.youtube_service:
+            print("❌ YouTube Data API 서비스가 없습니다. 유튜브 활동을 확인할 수 없습니다.")
+            return
+
+        for config in active_youtube_configs:
+            guild_id = config['guild_id']
+            youtube_channel_ids = json.loads(config['youtube_channel_ids_json'])
+            notification_channel_id = config['youtube_notification_channel_id']
+
+            if not notification_channel_id:
+                print(f"⚠️ 서버 {{guild_id}}: 유튜브 알림 채널이 설정되지 않았습니다.")
+                continue
+
+            notification_channel = self.bot.get_channel(int(notification_channel_id))
+            if not notification_channel:
+                print(f"⚠️ 서버 {{guild_id}}: 알림 채널을 찾을 수 없습니다. (ID: {{notification_channel_id}})")
+                continue
+
+            for yt_channel_id in youtube_channel_ids:
+                try:
+                    # 채널의 최신 비디오 정보 가져오기
+                    request = self.youtube_service.channels().list(
+                        part="contentDetails",
+                        id=yt_channel_id
+                    )
+                    response = request.execute()
+
+                    # 업로드 플레이리스트 ID 가져오기
+                    uploads_playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
+
+                    playlist_request = self.youtube_service.playlistItems().list(
+                        part="snippet",
+                        playlistId=uploads_playlist_id,
+                        maxResults=1 # 최신 비디오 1개만 가져옴
+                    )
+                    playlist_response = playlist_request.execute()
+
+                    if not playlist_response['items']:
+                        continue # 비디오가 없는 채널
+
+                    latest_video = playlist_response['items'][0]['snippet']
+                    video_id = latest_video['resourceId']['videoId']
+                    video_title = latest_video['title']
+                    publish_time_str = latest_video['publishedAt']
+
+                    # ISO 8601 문자열을 datetime 객체로 변환
+                    publish_time = datetime.datetime.fromisoformat(publish_time_str.replace('Z', '+00:00'))
+
+                    # 🚩 이 채널(yt_channel_id)의 마지막 확인 시간 가져오기
+                    last_published = self.last_checked.get(guild_id, {{}}).get(yt_channel_id)
+
+                    if last_published and publish_time <= last_published:
+                        continue # 이미 알림 보냈거나 더 오래된 비디오
+
+                    # 새 비디오 감지: 알림 보내기
+                    video_url = f"https://www.youtube.com/watch?v={{video_id}}"
+                    channel_title = latest_video['channelTitle']
+
+                    embed = discord.Embed(
+                        title=f"🎬 새로운 영상 업로드!",
+                        description=f"[{video_title}]({{video_url}})",
+                        color=discord.Color.red()
+                    )
+                    embed.set_author(name=channel_title, url=f"https://www.youtube.com/channel/{{yt_channel_id}}")
+                    embed.set_thumbnail(url=latest_video['thumbnails']['high']['url'])
+                    embed.set_footer(text=f"업로드됨: {publish_time.strftime('%Y년 %m월 %d일 %H시 %M분')}")
+
+                    await notification_channel.send(embed=embed)
+                    print(f"✅ 서버 {{guild_id}}: 유튜브 알림 전송 완료 - {{video_title}}")
+
+                    # 🚩 마지막 확인 시간 업데이트
+                    if guild_id not in self.last_checked:
+                        self.last_checked[guild_id] = {{}}
+                    self.last_checked[guild_id][yt_channel_id] = publish_time
+
+                except Exception as e:
+                    print(f"❌ 서버 {{guild_id}}, 유튜브 채널 {{yt_channel_id}} 확인 중 오류 발생: {{e}}")
+
+    @tasks.loop(minutes=10) # 🚩 10분마다 유튜브 채널 확인 (API 호출 제한 고려)
+    async def check_youtube_channels(self):
+        await self.bot.wait_until_ready() # 봇 준비될 때까지 대기
+
+        # 🚩 server_configs 테이블에서 유튜브 활동이 활성화된 모든 서버 정보 가져오기 (SQLite 사용)
+        conn = self.bot.get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT guild_id, youtube_activity_enabled, youtube_channel_ids_json, youtube_notification_channel_id FROM server_configs WHERE youtube_activity_enabled = 1")
+        active_youtube_configs = cursor.fetchall()
+        conn.close()
+
+        if not self.youtube_service:
+            print("❌ YouTube Data API 서비스가 없습니다. 유튜브 활동을 확인할 수 없습니다.")
+            return
+
+        for config in active_youtube_configs:
+            guild_id = config['guild_id']
+            youtube_channel_ids = json.loads(config['youtube_channel_ids_json'])
+            notification_channel_id = config['youtube_notification_channel_id']
+
+            if not notification_channel_id:
+                print(f"⚠️ 서버 {{guild_id}}: 유튜브 알림 채널이 설정되지 않았습니다.")
+                continue
+
+            notification_channel = self.bot.get_channel(int(notification_channel_id))
+            if not notification_channel:
+                print(f"⚠️ 서버 {{guild_id}}: 알림 채널을 찾을 수 없습니다. (ID: {{notification_channel_id}})")
+                continue
+
+            for yt_channel_id in youtube_channel_ids:
+                try:
+                    # 채널의 최신 비디오 정보 가져오기
+                    request = self.youtube_service.channels().list(
+                        part="contentDetails",
+                        id=yt_channel_id
+                    )
+                    response = request.execute()
+
+                    # 업로드 플레이리스트 ID 가져오기
+                    uploads_playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
+
+                    playlist_request = self.youtube_service.playlistItems().list(
+                        part="snippet",
+                        playlistId=uploads_playlist_id,
+                        maxResults=1 # 최신 비디오 1개만 가져옴
+                    )
+                    playlist_response = playlist_request.execute()
+
+                    if not playlist_response['items']:
+                        continue # 비디오가 없는 채널
+
+                    latest_video = playlist_response['items'][0]['snippet']
+                    video_id = latest_video['resourceId']['videoId']
+                    video_title = latest_video['title']
+                    publish_time_str = latest_video['publishedAt']
+
+                    # ISO 8601 문자열을 datetime 객체로 변환
+                    publish_time = datetime.datetime.fromisoformat(publish_time_str.replace('Z', '+00:00'))
+
+                    # 🚩 이 채널(yt_channel_id)의 마지막 확인 시간 가져오기
+                    last_published = self.last_checked.get(guild_id, {{}}).get(yt_channel_id)
+
+                    if last_published and publish_time <= last_published:
+                        continue # 이미 알림 보냈거나 더 오래된 비디오
+
+                    # 새 비디오 감지: 알림 보내기
+                    video_url = f"https://www.youtube.com/watch?v={{video_id}}"
+                    channel_title = latest_video['channelTitle']
+
+                    embed = discord.Embed(
+                        title=f"🎬 새로운 영상 업로드!",
+                        description=f"[{video_title}]({{video_url}})",
+                        color=discord.Color.red()
+                    )
+                    embed.set_author(name=channel_title, url=f"https://www.youtube.com/channel/{{yt_channel_id}}")
+                    embed.set_thumbnail(url=latest_video['thumbnails']['high']['url'])
+                    embed.set_footer(text=f"업로드됨: {publish_time.strftime('%Y년 %m월 %d일 %H시 %M분')}")
+
+                    await notification_channel.send(embed=embed)
+                    print(f"✅ 서버 {{guild_id}}: 유튜브 알림 전송 완료 - {{video_title}}")
+
+                    # 🚩 마지막 확인 시간 업데이트
+                    if guild_id not in self.last_checked:
+                        self.last_checked[guild_id] = {{}}
+                    self.last_checked[guild_id][yt_channel_id] = publish_time
+
+                except Exception as e:
+                    print(f"❌ 서버 {{guild_id}}, 유튜브 채널 {{yt_channel_id}} 확인 중 오류 발생: {{e}}")
+
+    @tasks.loop(minutes=10) # 🚩 10분마다 유튜브 채널 확인 (API 호출 제한 고려)
+    async def check_youtube_channels(self):
+        await self.bot.wait_until_ready() # 봇 준비될 때까지 대기
+
+        # 🚩 server_configs 테이블에서 유튜브 활동이 활성화된 모든 서버 정보 가져오기 (SQLite 사용)
+        conn = self.bot.get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT guild_id, youtube_activity_enabled, youtube_channel_ids_json, youtube_notification_channel_id FROM server_configs WHERE youtube_activity_enabled = 1")
+        active_youtube_configs = cursor.fetchall()
+        conn.close()
+
+        if not self.youtube_service:
+            print("❌ YouTube Data API 서비스가 없습니다. 유튜브 활동을 확인할 수 없습니다.")
+            return
+
+        for config in active_youtube_configs:
+            guild_id = config['guild_id']
+            youtube_channel_ids = json.loads(config['youtube_channel_ids_json'])
+            notification_channel_id = config['youtube_notification_channel_id']
+
+            if not notification_channel_id:
+                print(f"⚠️ 서버 {{guild_id}}: 유튜브 알림 채널이 설정되지 않았습니다.")
+                continue
+
+            notification_channel = self.bot.get_channel(int(notification_channel_id))
+            if not notification_channel:
+                print(f"⚠️ 서버 {{guild_id}}: 알림 채널을 찾을 수 없습니다. (ID: {{notification_channel_id}})")
+                continue
+
+            for yt_channel_id in youtube_channel_ids:
+                try:
+                    # 채널의 최신 비디오 정보 가져오기
+                    request = self.youtube_service.channels().list(
+                        part="contentDetails",
+                        id=yt_channel_id
+                    )
+                    response = request.execute()
+
+                    # 업로드 플레이리스트 ID 가져오기
+                    uploads_playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
+
+                    playlist_request = self.youtube_service.playlistItems().list(
+                        part="snippet",
+                        playlistId=uploads_playlist_id,
+                        maxResults=1 # 최신 비디오 1개만 가져옴
+                    )
+                    playlist_response = playlist_request.execute()
+
+                    if not playlist_response['items']:
+                        continue # 비디오가 없는 채널
+
+                    latest_video = playlist_response['items'][0]['snippet']
+                    video_id = latest_video['resourceId']['videoId']
+                    video_title = latest_video['title']
+                    publish_time_str = latest_video['publishedAt']
+
+                    # ISO 8601 문자열을 datetime 객체로 변환
+                    publish_time = datetime.datetime.fromisoformat(publish_time_str.replace('Z', '+00:00'))
+
+                    # 🚩 이 채널(yt_channel_id)의 마지막 확인 시간 가져오기
+                    last_published = self.last_checked.get(guild_id, {{}}).get(yt_channel_id)
+
+                    if last_published and publish_time <= last_published:
+                        continue # 이미 알림 보냈거나 더 오래된 비디오
+
+                    # 새 비디오 감지: 알림 보내기
+                    video_url = f"https://www.youtube.com/watch?v={{video_id}}"
+                    channel_title = latest_video['channelTitle']
+
+                    embed = discord.Embed(
+                        title=f"🎬 새로운 영상 업로드!",
+                        description=f"[{video_title}]({{video_url}})",
+                        color=discord.Color.red()
+                    )
+                    embed.set_author(name=channel_title, url=f"https://www.youtube.com/channel/{{yt_channel_id}}")
+                    embed.set_thumbnail(url=latest_video['thumbnails']['high']['url'])
+                    embed.set_footer(text=f"업로드됨: {publish_time.strftime('%Y년 %m월 %d일 %H시 %M분')}")
+
+                    await notification_channel.send(embed=embed)
+                    print(f"✅ 서버 {{guild_id}}: 유튜브 알림 전송 완료 - {{video_title}}")
+
+                    # 🚩 마지막 확인 시간 업데이트
+                    if guild_id not in self.last_checked:
+                        self.last_checked[guild_id] = {{}}
+                    self.last_checked[guild_id][yt_channel_id] = publish_time
+
+                except Exception as e:
+                    print(f"❌ 서버 {{guild_id}}, 유튜브 채널 {{yt_channel_id}} 확인 중 오류 발생: {{e}}")
+
+    @tasks.loop(minutes=10) # 🚩 10분마다 유튜브 채널 확인 (API 호출 제한 고려)
+    async def check_youtube_channels(self):
+        await self.bot.wait_until_ready() # 봇 준비될 때까지 대기
+
+        # 🚩 server_configs 테이블에서 유튜브 활동이 활성화된 모든 서버 정보 가져오기 (SQLite 사용)
+        conn = self.bot.get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT guild_id, youtube_activity_enabled, youtube_channel_ids_json, youtube_notification_channel_id FROM server_configs WHERE youtube_activity_enabled = 1")
+        active_youtube_configs = cursor.fetchall()
+        conn.close()
+
+        if not self.youtube_service:
+            print("❌ YouTube Data API 서비스가 없습니다. 유튜브 활동을 확인할 수 없습니다.")
+            return
+
+        for config in active_youtube_configs:
+            guild_id = config['guild_id']
+            youtube_channel_ids = json.loads(config['youtube_channel_ids_json'])
+            notification_channel_id = config['youtube_notification_channel_id']
+
+            if not notification_channel_id:
+                print(f"⚠️ 서버 {{guild_id}}: 유튜브 알림 채널이 설정되지 않았습니다.")
+                continue
+
+            notification_channel = self.bot.get_channel(int(notification_channel_id))
+            if not notification_channel:
+                print(f"⚠️ 서버 {{guild_id}}: 알림 채널을 찾을 수 없습니다. (ID: {{notification_channel_id}})")
+                continue
+
+            for yt_channel_id in youtube_channel_ids:
+                try:
+                    # 채널의 최신 비디오 정보 가져오기
+                    request = self.youtube_service.channels().list(
+                        part="contentDetails",
+                        id=yt_channel_id
+                    )
+                    response = request.execute()
+
+                    # 업로드 플레이리스트 ID 가져오기
+                    uploads_playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
+
+                    playlist_request = self.youtube_service.playlistItems().list(
+                        part="snippet",
+                        playlistId=uploads_playlist_id,
+                        maxResults=1 # 최신 비디오 1개만 가져옴
+                    )
+                    playlist_response = playlist_request.execute()
+
+                    if not playlist_response['items']:
+                        continue # 비디오가 없는 채널
+
+                    latest_video = playlist_response['items'][0]['snippet']
+                    video_id = latest_video['resourceId']['videoId']
+                    video_title = latest_video['title']
+                    publish_time_str = latest_video['publishedAt']
+
+                    # ISO 8601 문자열을 datetime 객체로 변환
+                    publish_time = datetime.datetime.fromisoformat(publish_time_str.replace('Z', '+00:00'))
+
+                    # 🚩 이 채널(yt_channel_id)의 마지막 확인 시간 가져오기
+                    last_published = self.last_checked.get(guild_id, {{}}).get(yt_channel_id)
+
+                    if last_published and publish_time <= last_published:
+                        continue # 이미 알림 보냈거나 더 오래된 비디오
+
+                    # 새 비디오 감지: 알림 보내기
+                    video_url = f"https://www.youtube.com/watch?v={{video_id}}"
+                    channel_title = latest_video['channelTitle']
+
+                    embed = discord.Embed(
+                        title=f"🎬 새로운 영상 업로드!",
+                        description=f"[{video_title}]({{video_url}})",
+                        color=discord.Color.red()
+                    )
+                    embed.set_author(name=channel_title, url=f"https://www.youtube.com/channel/{{yt_channel_id}}")
+                    embed.set_thumbnail(url=latest_video['thumbnails']['high']['url'])
+                    embed.set_footer(text=f"업로드됨: {publish_time.strftime('%Y년 %m월 %d일 %H시 %M분')}")
+
+                    await notification_channel.send(embed=embed)
+                    print(f"✅ 서버 {{guild_id}}: 유튜브 알림 전송 완료 - {{video_title}}")
+
+                    # 🚩 마지막 확인 시간 업데이트
+                    if guild_id not in self.last_checked:
+                        self.last_checked[guild_id] = {{}}
+                    self.last_checked[guild_id][yt_channel_id] = publish_time
+
+                except Exception as e:
+                    print(f"❌ 서버 {{guild_id}}, 유튜브 채널 {{yt_channel_id}} 확인 중 오류 발생: {{e}}")
+
+    @tasks.loop(minutes=10) # 🚩 10분마다 유튜브 채널 확인 (API 호출 제한 고려)
+    async def check_youtube_channels(self):
+        await self.bot.wait_until_ready() # 봇 준비될 때까지 대기
+
+        # 🚩 server_configs 테이블에서 유튜브 활동이 활성화된 모든 서버 정보 가져오기 (SQLite 사용)
+        conn = self.bot.get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT guild_id, youtube_activity_enabled, youtube_channel_ids_json, youtube_notification_channel_id FROM server_configs WHERE youtube_activity_enabled = 1")
+        active_youtube_configs = cursor.fetchall()
+        conn.close()
+
+        if not self.youtube_service:
+            print("❌ YouTube Data API 서비스가 없습니다. 유튜브 활동을 확인할 수 없습니다.")
+            return
+
+        for config in active_youtube_configs:
+            guild_id = config['guild_id']
+            youtube_channel_ids = json.loads(config['youtube_channel_ids_json'])
+            notification_channel_id = config['youtube_notification_channel_id']
+
+            if not notification_channel_id:
+                print(f"⚠️ 서버 {{guild_id}}: 유튜브 알림 채널이 설정되지 않았습니다.")
+                continue
+
+            notification_channel = self.bot.get_channel(int(notification_channel_id))
+            if not notification_channel:
+                print(f"⚠️ 서버 {{guild_id}}: 알림 채널을 찾을 수 없습니다. (ID: {{notification_channel_id}})")
+                continue
+
+            for yt_channel_id in youtube_channel_ids:
+                try:
+                    # 채널의 최신 비디오 정보 가져오기
+                    request = self.youtube_service.channels().list(
+                        part="contentDetails",
+                        id=yt_channel_id
+                    )
+                    response = request.execute()
+
+                    # 업로드 플레이리스트 ID 가져오기
+                    uploads_playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
+
+                    playlist_request = self.youtube_service.playlistItems().list(
+                        part="snippet",
+                        playlistId=uploads_playlist_id,
+                        maxResults=1 # 최신 비디오 1개만 가져옴
+                    )
+                    playlist_response = playlist_request.execute()
+
+                    if not playlist_response['items']:
+                        continue # 비디오가 없는 채널
+
+                    latest_video = playlist_response['items'][0]['snippet']
+                    video_id = latest_video['resourceId']['videoId']
+                    video_title = latest_video['title']
+                    publish_time_str = latest_video['publishedAt']
+
+                    # ISO 8601 문자열을 datetime 객체로 변환
+                    publish_time = datetime.datetime.fromisoformat(publish_time_str.replace('Z', '+00:00'))
+
+                    # 🚩 이 채널(yt_channel_id)의 마지막 확인 시간 가져오기
+                    last_published = self.last_checked.get(guild_id, {{}}).get(yt_channel_id)
+
+                    if last_published and publish_time <= last_published:
+                        continue # 이미 알림 보냈거나 더 오래된 비디오
+
+                    # 새 비디오 감지: 알림 보내기
+                    video_url = f"https://www.youtube.com/watch?v={{video_id}}"
+                    channel_title = latest_video['channelTitle']
+
+                    embed = discord.Embed(
+                        title=f"🎬 새로운 영상 업로드!",
+                        description=f"[{video_title}]({{video_url}})",
+                        color=discord.Color.red()
+                    )
+                    embed.set_author(name=channel_title, url=f"https://www.youtube.com/channel/{{yt_channel_id}}")
+                    embed.set_thumbnail(url=latest_video['thumbnails']['high']['url'])
+                    embed.set_footer(text=f"업로드됨: {publish_time.strftime('%Y년 %m월 %d일 %H시 %M분')}")
+
+                    await notification_channel.send(embed=embed)
+                    print(f"✅ 서버 {{guild_id}}: 유튜브 알림 전송 완료 - {{video_title}}")
+
+                    # 🚩 마지막 확인 시간 업데이트
+                    if guild_id not in self.last_checked:
+                        self.last_checked[guild_id] = {{}}
+                    self.last_checked[guild_id][yt_channel_id] = publish_time
+
+                except Exception as e:
+                    print(f"❌ 서버 {{guild_id}}, 유튜브 채널 {{yt_channel_id}} 확인 중 오류 발생: {{e}}")
+
+    @tasks.loop(minutes=10) # 🚩 10분마다 유튜브 채널 확인 (API 호출 제한 고려)
+    async def check_youtube_channels(self):
+        await self.bot.wait_until_ready() # 봇 준비될 때까지 대기
+
+        # 🚩 server_configs 테이블에서 유튜브 활동이 활성화된 모든 서버 정보 가져오기 (SQLite 사용)
+        conn = self.bot.get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT guild_id, youtube_activity_enabled, youtube_channel_ids_json, youtube_notification_channel_id FROM server_configs WHERE youtube_activity_enabled = 1")
+        active_youtube_configs = cursor.fetchall()
+        conn.close()
+
+        if not self.youtube_service:
+            print("❌ YouTube Data API 서비스가 없습니다. 유튜브 활동을 확인할 수 없습니다.")
+            return
+
+        for config in active_youtube_configs:
+            guild_id = config['guild_id']
+            youtube_channel_ids = json.loads(config['youtube_channel_ids_json'])
+            notification_channel_id = config['youtube_notification_channel_id']
+
+            if not notification_channel_id:
+                print(f"⚠️ 서버 {{guild_id}}: 유튜브 알림 채널이 설정되지 않았습니다.")
+                continue
+
+            notification_channel = self.bot.get_channel(int(notification_channel_id))
+            if not notification_channel:
+                print(f"⚠️ 서버 {{guild_id}}: 알림 채널을 찾을 수 없습니다. (ID: {{notification_channel_id}})")
+                continue
+
+            for yt_channel_id in youtube_channel_ids:
+                try:
+                    # 채널의 최신 비디오 정보 가져오기
+                    request = self.youtube_service.channels().list(
+                        part="contentDetails",
+                        id=yt_channel_id
+                    )
+                    response = request.execute()
+
+                    # 업로드 플레이리스트 ID 가져오기
+                    uploads_playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
+
+                    playlist_request = self.youtube_service.playlistItems().list(
+                        part="snippet",
+                        playlistId=uploads_playlist_id,
+                        maxResults=1 # 최신 비디오 1개만 가져옴
+                    )
+                    playlist_response = playlist_request.execute()
+
+                    if not playlist_response['items']:
+                        continue # 비디오가 없는 채널
+
+                    latest_video = playlist_response['items'][0]['snippet']
+                    video_id = latest_video['resourceId']['videoId']
+                    video_title = latest_video['title']
+                    publish_time_str = latest_video['publishedAt']
+
+                    # ISO 8601 문자열을 datetime 객체로 변환
+                    publish_time = datetime.datetime.fromisoformat(publish_time_str.replace('Z', '+00:00'))
+
+                    # 🚩 이 채널(yt_channel_id)의 마지막 확인 시간 가져오기
+                    last_published = self.last_checked.get(guild_id, {{}}).get(yt_channel_id)
+
+                    if last_published and publish_time <= last_published:
+                        continue # 이미 알림 보냈거나 더 오래된 비디오
+
+                    # 새 비디오 감지: 알림 보내기
+                    video_url = f"https://www.youtube.com/watch?v={{video_id}}"
+                    channel_title = latest_video['channelTitle']
+
+                    embed = discord.Embed(
+                        title=f"🎬 새로운 영상 업로드!",
+                        description=f"[{video_title}]({{video_url}})",
+                        color=discord.Color.red()
+                    )
+                    embed.set_author(name=channel_title, url=f"https://www.youtube.com/channel/{{yt_channel_id}}")
+                    embed.set_thumbnail(url=latest_video['thumbnails']['high']['url'])
+                    embed.set_footer(text=f"업로드됨: {publish_time.strftime('%Y년 %m월 %d일 %H시 %M분')}")
+
+                    await notification_channel.send(embed=embed)
+                    print(f"✅ 서버 {{guild_id}}: 유튜브 알림 전송 완료 - {{video_title}}")
+
+                    # 🚩 마지막 확인 시간 업데이트
+                    if guild_id not in self.last_checked:
+                        self.last_checked[guild_id] = {{}}
+                    self.last_checked[guild_id][yt_channel_id] = publish_time
+
+                except Exception as e:
+                    print(f"❌ 서버 {{guild_id}}, 유튜브 채널 {{yt_channel_id}} 확인 중 오류 발생: {{e}}")
+
+    @tasks.loop(minutes=10) # 🚩 10분마다 유튜브 채널 확인 (API 호출 제한 고려)
+    async def check_youtube_channels(self):
+        await self.bot.wait_until_ready() # 봇 준비될 때까지 대기
+
+        # 🚩 server_configs 테이블에서 유튜브 활동이 활성화된 모든 서버 정보 가져오기 (SQLite 사용)
+        conn = self.bot.get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT guild_id, youtube_activity_enabled, youtube_channel_ids_json, youtube_notification_channel_id FROM server_configs WHERE youtube_activity_enabled = 1")
+        active_youtube_configs = cursor.fetchall()
+        conn.close()
+
+        if not self.youtube_service:
+            print("❌ YouTube Data API 서비스가 없습니다. 유튜브 활동을 확인할 수 없습니다.")
+            return
+
+        for config in active_youtube_configs:
+            guild_id = config['guild_id']
+            youtube_channel_ids = json.loads(config['youtube_channel_ids_json'])
+            notification_channel_id = config['youtube_notification_channel_id']
+
+            if not notification_channel_id:
+                print(f"⚠️ 서버 {{guild_id}}: 유튜브 알림 채널이 설정되지 않았습니다.")
+                continue
+
+            notification_channel = self.bot.get_channel(int(notification_channel_id))
+            if not notification_channel:
+                print(f"⚠️ 서버 {{guild_id}}: 알림 채널을 찾을 수 없습니다. (ID: {{notification_channel_id}})")
+                continue
+
+            for yt_channel_id in youtube_channel_ids:
+                try:
+                    # 채널의 최신 비디오 정보 가져오기
+                    request = self.youtube_service.channels().list(
+                        part="contentDetails",
+                        id=yt_channel_id
+                    )
+                    response = request.execute()
+
+                    # 업로드 플레이리스트 ID 가져오기
+                    uploads_playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
+
+                    playlist_request = self.youtube_service.playlistItems().list(
+                        part="snippet",
+                        playlistId=uploads_playlist_id,
+                        maxResults=1 # 최신 비디오 1개만 가져옴
+                    )
+                    playlist_response = playlist_request.execute()
+
+                    if not playlist_response['items']:
+                        continue # 비디오가 없는 채널
+
+                    latest_video = playlist_response['items'][0]['snippet']
+                    video_id = latest_video['resourceId']['videoId']
+                    video_title = latest_video['title']
+                    publish_time_str = latest_video['publishedAt']
+
+                    # ISO 8601 문자열을 datetime 객체로 변환
+                    publish_time = datetime.datetime.fromisoformat(publish_time_str.replace('Z', '+00:00'))
+
+                    # 🚩 이 채널(yt_channel_id)의 마지막 확인 시간 가져오기
+                    last_published = self.last_checked.get(guild_id, {{}}).get(yt_channel_id)
+
+                    if last_published and publish_time <= last_published:
+                        continue # 이미 알림 보냈거나 더 오래된 비디오
+
+                    # 새 비디오 감지: 알림 보내기
+                    video_url = f"https://www.youtube.com/watch?v={{video_id}}"
+                    channel_title = latest_video['channelTitle']
+
+                    embed = discord.Embed(
+                        title=f"🎬 새로운 영상 업로드!",
+                        description=f"[{video_title}]({{video_url}})",
+                        color=discord.Color.red()
+                    )
+                    embed.set_author(name=channel_title, url=f"https://www.youtube.com/channel/{{yt_channel_id}}")
+                    embed.set_thumbnail(url=latest_video['thumbnails']['high']['url'])
+                    embed.set_footer(text=f"업로드됨: {publish_time.strftime('%Y년 %m월 %d일 %H시 %M분')}")
+
+                    await notification_channel.send(embed=embed)
+                    print(f"✅ 서버 {{guild_id}}: 유튜브 알림 전송 완료 - {{video_title}}")
+
+                    # 🚩 마지막 확인 시간 업데이트
+                    if guild_id not in self.last_checked:
+                        self.last_checked[guild_id] = {{}}
+                    self.last_checked[guild_id][yt_channel_id] = publish_time
+
+                except Exception as e:
+                    print(f"❌ 서버 {{guild_id}}, 유튜브 채널 {{yt_channel_id}} 확인 중 오류 발생: {{e}}")
+
+    @tasks.loop(minutes=10) # 🚩 10분마다 유튜브 채널 확인 (API 호출 제한 고려)
+    async def check_youtube_channels(self):
+        await self.bot.wait_until_ready() # 봇 준비될 때까지 대기
+
+        # 🚩 server_configs 테이블에서 유튜브 활동이 활성화된 모든 서버 정보 가져오기 (SQLite 사용)
+        conn = self.bot.get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT guild_id, youtube_activity_enabled, youtube_channel_ids_json, youtube_notification_channel_id FROM server_configs WHERE youtube_activity_enabled = 1")
+        active_youtube_configs = cursor.fetchall()
+        conn.close()
+
+        if not self.youtube_service:
+            print("❌ YouTube Data API 서비스가 없습니다. 유튜브 활동을 확인할 수 없습니다.")
+            return
+
+        for config in active_youtube_configs:
+            guild_id = config['guild_id']
+            youtube_channel_ids = json.loads(config['youtube_channel_ids_json'])
+            notification_channel_id = config['youtube_notification_channel_id']
+
+            if not notification_channel_id:
+                print(f"⚠️ 서버 {{guild_id}}: 유튜브 알림 채널이 설정되지 않았습니다.")
+                continue
+
+            notification_channel = self.bot.get_channel(int(notification_channel_id))
+            if not notification_channel:
+                print(f"⚠️ 서버 {{guild_id}}: 알림 채널을 찾을 수 없습니다. (ID: {{notification_channel_id}})")
+                continue
+
+            for yt_channel_id in youtube_channel_ids:
+                try:
+                    # 채널의 최신 비디오 정보 가져오기
+                    request = self.youtube_service.channels().list(
+                        part="contentDetails",
+                        id=yt_channel_id
+                    )
+                    response = request.execute()
+
+                    # 업로드 플레이리스트 ID 가져오기
+                    uploads_playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
+
+                    playlist_request = self.youtube_service.playlistItems().list(
+                        part="snippet",
+                        playlistId=uploads_playlist_id,
+                        maxResults=1 # 최신 비디오 1개만 가져옴
+                    )
+                    playlist_response = playlist_request.execute()
+
+                    if not playlist_response['items']:
+                        continue # 비디오가 없는 채널
+
+                    latest_video = playlist_response['items'][0]['snippet']
+                    video_id = latest_video['resourceId']['videoId']
+                    video_title = latest_video['title']
+                    publish_time_str = latest_video['publishedAt']
+
+                    # ISO 8601 문자열을 datetime 객체로 변환
+                    publish_time = datetime.datetime.fromisoformat(publish_time_str.replace('Z', '+00:00'))
+
+                    # 🚩 이 채널(yt_channel_id)의 마지막 확인 시간 가져오기
+                    last_published = self.last_checked.get(guild_id, {{}}).get(yt_channel_id)
+
+                    if last_published and publish_time <= last_published:
+                        continue # 이미 알림 보냈거나 더 오래된 비디오
+
+                    # 새 비디오 감지: 알림 보내기
+                    video_url = f"https://www.youtube.com/watch?v={{video_id}}"
+                    channel_title = latest_video['channelTitle']
+
+                    embed = discord.Embed(
+                        title=f"🎬 새로운 영상 업로드!",
+                        description=f"[{video_title}]({{video_url}})",
+                        color=discord.Color.red()
+                    )
+                    embed.set_author(name=channel_title, url=f"https://www.youtube.com/channel/{{yt_channel_id}}")
+                    embed.set_thumbnail(url=latest_video['thumbnails']['high']['url'])
+                    embed.set_footer(text=f"업로드됨: {publish_time.strftime('%Y년 %m월 %d일 %H시 %M분')}")
+
+                    await notification_channel.send(embed=embed)
+                    print(f"✅ 서버 {{guild_id}}: 유튜브 알림 전송 완료 - {{video_title}}")
+
+                    # 🚩 마지막 확인 시간 업데이트
+                    if guild_id not in self.last_checked:
+                        self.last_checked[guild_id] = {{}}
+                    self.last_checked[guild_id][yt_channel_id] = publish_time
+
+                except Exception as e:
+                    print(f"❌ 서버 {{guild_id}}, 유튜브 채널 {{yt_channel_id}} 확인 중 오류 발생: {{e}}")
+
+    @tasks.loop(minutes=10) # 🚩 10분마다 유튜브 채널 확인 (API 호출 제한 고려)
+    async def check_youtube_channels(self):
+        await self.bot.wait_until_ready() # 봇 준비될 때까지 대기
+
+        # 🚩 server_configs 테이블에서 유튜브 활동이 활성화된 모든 서버 정보 가져오기 (SQLite 사용)
+        conn = self.bot.get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT guild_id, youtube_activity_enabled, youtube_channel_ids_json, youtube_notification_channel_id FROM server_configs WHERE youtube_activity_enabled = 1")
+        active_youtube_configs = cursor.fetchall()
+        conn.close()
+
+        if not self.youtube_service:
+            print("❌ YouTube Data API 서비스가 없습니다. 유튜브 활동을 확인할 수 없습니다.")
+            return
+
+        for config in active_youtube_configs:
+            guild_id = config['guild_id']
+            youtube_channel_ids = json.loads(config['youtube_channel_ids_json'])
+            notification_channel_id = config['youtube_notification_channel_id']
+
+            if not notification_channel_id:
+                print(f"⚠️ 서버 {{guild_id}}: 유튜브 알림 채널이 설정되지 않았습니다.")
+                continue
+
+            notification_channel = self.bot.get_channel(int(notification_channel_id))
+            if not notification_channel:
+                print(f"⚠️ 서버 {{guild_id}}: 알림 채널을 찾을 수 없습니다. (ID: {{notification_channel_id}})")
+                continue
+
+            for yt_channel_id in youtube_channel_ids:
+                try:
+                    # 채널의 최신 비디오 정보 가져오기
+                    request = self.youtube_service.channels().list(
+                        part="contentDetails",
+                        id=yt_channel_id
+                    )
+                    response = request.execute()
+
+                    # 업로드 플레이리스트 ID 가져오기
+                    uploads_playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
+
+                    playlist_request = self.youtube_service.playlistItems().list(
+                        part="snippet",
+                        playlistId=uploads_playlist_id,
+                        maxResults=1 # 최신 비디오 1개만 가져옴
+                    )
+                    playlist_response = playlist_request.execute()
+
+                    if not playlist_response['items']:
+                        continue # 비디오가 없는 채널
+
+                    latest_video = playlist_response['items'][0]['snippet']
+                    video_id = latest_video['resourceId']['videoId']
+                    video_title = latest_video['title']
+                    publish_time_str = latest_video['publishedAt']
+
+                    # ISO 8601 문자열을 datetime 객체로 변환
+                    publish_time = datetime.datetime.fromisoformat(publish_time_str.replace('Z', '+00:00'))
+
+                    # 🚩 이 채널(yt_channel_id)의 마지막 확인 시간 가져오기
+                    last_published = self.last_checked.get(guild_id, {{}}).get(yt_channel_id)
+
+                    if last_published and publish_time <= last_published:
+                        continue # 이미 알림 보냈거나 더 오래된 비디오
+
+                    # 새 비디오 감지: 알림 보내기
+                    video_url = f"https://www.youtube.com/watch?v={{video_id}}"
+                    channel_title = latest_video['channelTitle']
+
+                    embed = discord.Embed(
+                        title=f"🎬 새로운 영상 업로드!",
+                        description=f"[{video_title}]({{video_url}})",
+                        color=discord.Color.red()
+                    )
+                    embed.set_author(name=channel_title, url=f"https://www.youtube.com/channel/{{yt_channel_id}}")
+                    embed.set_thumbnail(url=latest_video['thumbnails']['high']['url'])
+                    embed.set_footer(text=f"업로드됨: {publish_time.strftime('%Y년 %m월 %d일 %H시 %M분')}")
+
+                    await notification_channel.send(embed=embed)
+                    print(f"✅ 서버 {{guild_id}}: 유튜브 알림 전송 완료 - {{video_title}}")
+
+                    # 🚩 마지막 확인 시간 업데이트
+                    if guild_id not in self.last_checked:
+                        self.last_checked[guild_id] = {{}}
+                    self.last_checked[guild_id][yt_channel_id] = publish_time
+
+                except Exception as e:
+                    print(f"❌ 서버 {{guild_id}}, 유튜브 채널 {{yt_channel_id}} 확인 중 오류 발생: {{e}}")
+
+    @tasks.loop(minutes=10) # 🚩 10분마다 유튜브 채널 확인 (API 호출 제한 고려)
+    async def check_youtube_channels(self):
+        await self.bot.wait_until_ready() # 봇 준비될 때까지 대기
+
+        # 🚩 server_configs 테이블에서 유튜브 활동이 활성화된 모든 서버 정보 가져오기 (SQLite 사용)
+        conn = self.bot.get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT guild_id, youtube_activity_enabled, youtube_channel_ids_json, youtube_notification_channel_id FROM server_configs WHERE youtube_activity_enabled = 1")
+        active_youtube_configs = cursor.fetchall()
+        conn.close()
+
+        if not self.youtube_service:
+            print("❌ YouTube Data API 서비스가 없습니다. 유튜브 활동을 확인할 수 없습니다.")
+            return
+
+        for config in active_youtube_configs:
+            guild_id = config['guild_id']
+            youtube_channel_ids = json.loads(config['youtube_channel_ids_json'])
+            notification_channel_id = config['youtube_notification_channel_id']
+
+            if not notification_channel_id:
+                print(f"⚠️ 서버 {{guild_id}}: 유튜브 알림 채널이 설정되지 않았습니다.")
+                continue
+
+            notification_channel = self.bot.get_channel(int(notification_channel_id))
+            if not notification_channel:
+                print(f"⚠️ 서버 {{guild_id}}: 알림 채널을 찾을 수 없습니다. (ID: {{notification_channel_id}})")
+                continue
+
+            for yt_channel_id in youtube_channel_ids:
+                try:
+                    # 채널의 최신 비디오 정보 가져오기
+                    request = self.youtube_service.channels().list(
+                        part="contentDetails",
+                        id=yt_channel_id
+                    )
+                    response = request.execute()
+
+                    # 업로드 플레이리스트 ID 가져오기
+                    uploads_playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
+
+                    playlist_request = self.youtube_service.playlistItems().list(
+                        part="snippet",
+                        playlistId=uploads_playlist_id,
+                        maxResults=1 # 최신 비디오 1개만 가져옴
+                    )
+                    playlist_response = playlist_request.execute()
+
+                    if not playlist_response['items']:
+                        continue # 비디오가 없는 채널
+
+                    latest_video = playlist_response['items'][0]['snippet']
+                    video_id = latest_video['resourceId']['videoId']
+                    video_title = latest_video['title']
+                    publish_time_str = latest_video['publishedAt']
+
+                    # ISO 8601 문자열을 datetime 객체로 변환
+                    publish_time = datetime.datetime.fromisoformat(publish_time_str.replace('Z', '+00:00'))
+
+                    # 🚩 이 채널(yt_channel_id)의 마지막 확인 시간 가져오기
+                    last_published = self.last_checked.get(guild_id, {{}}).get(yt_channel_id)
+
+                    if last_published and publish_time <= last_published:
+                        continue # 이미 알림 보냈거나 더 오래된 비디오
+
+                    # 새 비디오 감지: 알림 보내기
+                    video_url = f"https://www.youtube.com/watch?v={{video_id}}"
+                    channel_title = latest_video['channelTitle']
+
+                    embed = discord.Embed(
+                        title=f"🎬 새로운 영상 업로드!",
+                        description=f"[{video_title}]({{video_url}})",
+                        color=discord.Color.red()
+                    )
+                    embed.set_author(name=channel_title, url=f"https://www.youtube.com/channel/{{yt_channel_id}}")
+                    embed.set_thumbnail(url=latest_video['thumbnails']['high']['url'])
+                    embed.set_footer(text=f"업로드됨: {publish_time.strftime('%Y년 %m월 %d일 %H시 %M분')}")
+
+                    await notification_channel.send(embed=embed)
+                    print(f"✅ 서버 {{guild_id}}: 유튜브 알림 전송 완료 - {{video_title}}")
+
+                    # 🚩 마지막 확인 시간 업데이트
+                    if guild_id not in self.last_checked:
+                        self.last_checked[guild_id] = {{}}
+                    self.last_checked[guild_id][yt_channel_id] = publish_time
+
+                except Exception as e:
+                    print(f"❌ 서버 {{guild_id}}, 유튜브 채널 {{yt_channel_id}} 확인 중 오류 발생: {{e}}")
+
+    @tasks.loop(minutes=10) # 🚩 10분마다 유튜브 채널 확인 (API 호출 제한 고려)
+    async def check_youtube_channels(self):
+        await self.bot.wait_until_ready() # 봇 준비될 때까지 대기
+
+        # 🚩 server_configs 테이블에서 유튜브 활동이 활성화된 모든 서버 정보 가져오기 (SQLite 사용)
+        conn = self.bot.get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT guild_id, youtube_activity_enabled, youtube_channel_ids_json, youtube_notification_channel_id FROM server_configs WHERE youtube_activity_enabled = 1")
+        active_youtube_configs = cursor.fetchall()
+        conn.close()
+
+        if not self.youtube_service:
+            print("❌ YouTube Data API 서비스가 없습니다. 유튜브 활동을 확인할 수 없습니다.")
+            return
+
+        for config in active_youtube_configs:
+            guild_id = config['guild_id']
+            youtube_channel_ids = json.loads(config['youtube_channel_ids_json'])
+            notification_channel_id = config['youtube_notification_channel_id']
+
+            if not notification_channel_id:
+                print(f"⚠️ 서버 {{guild_id}}: 유튜브 알림 채널이 설정되지 않았습니다.")
+                continue
+
+            notification_channel = self.bot.get_channel(int(notification_channel_id))
+            if not notification_channel:
+                print(f"⚠️ 서버 {{guild_id}}: 알림 채널을 찾을 수 없습니다. (ID: {{notification_channel_id}})")
+                continue
+
+            for yt_channel_id in youtube_channel_ids:
+                try:
+                    # 채널의 최신 비디오 정보 가져오기
+                    request = self.youtube_service.channels().list(
+                        part="contentDetails",
+                        id=yt_channel_id
+                    )
+                    response = request.execute()
+
+                    # 업로드 플레이리스트 ID 가져오기
+                    uploads_playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
+
+                    playlist_request = self.youtube_service.playlistItems().list(
+                        part="snippet",
+                        playlistId=uploads_playlist_id,
+                        maxResults=1 # 최신 비디오 1개만 가져옴
+                    )
+                    playlist_response = playlist_request.execute()
+
+                    if not playlist_response['items']:
+                        continue # 비디오가 없는 채널
+
+                    latest_video = playlist_response['items'][0]['snippet']
+                    video_id = latest_video['resourceId']['videoId']
+                    video_title = latest_video['title']
+                    publish_time_str = latest_video['publishedAt']
+
+                    # ISO 8601 문자열을 datetime 객체로 변환
+                    publish_time = datetime.datetime.fromisoformat(publish_time_str.replace('Z', '+00:00'))
+
+                    # 🚩 이 채널(yt_channel_id)의 마지막 확인 시간 가져오기
+                    last_published = self.last_checked.get(guild_id, {{}}).get(yt_channel_id)
+
+                    if last_published and publish_time <= last_published:
+                        continue # 이미 알림 보냈거나 더 오래된 비디오
+
+                    # 새 비디오 감지: 알림 보내기
+                    video_url = f"https://www.youtube.com/watch?v={{video_id}}"
+                    channel_title = latest_video['channelTitle']
+
+                    embed = discord.Embed(
+                        title=f"🎬 새로운 영상 업로드!",
+                        description=f"[{video_title}]({{video_url}})",
+                        color=discord.Color.red()
+                    )
+                    embed.set_author(name=channel_title, url=f"https://www.youtube.com/channel/{{yt_channel_id}}")
+                    embed.set_thumbnail(url=latest_video['thumbnails']['high']['url'])
+                    embed.set_footer(text=f"업로드됨: {publish_time.strftime('%Y년 %m월 %d일 %H시 %M분')}")
+
+                    await notification_channel.send(embed=embed)
+                    print(f"✅ 서버 {{guild_id}}: 유튜브 알림 전송 완료 - {{video_title}}")
+
+                    # 🚩 마지막 확인 시간 업데이트
+                    if guild_id not in self.last_checked:
+                        self.last_checked[guild_id] = {{}}
+                    self.last_checked[guild_id][yt_channel_id] = publish_time
+
+                except Exception as e:
+                    print(f"❌ 서버 {{guild_id}}, 유튜브 채널 {{yt_channel_id}} 확인 중 오류 발생: {{e}}")
+
+    @tasks.loop(minutes=10) # 🚩 10분마다 유튜브 채널 확인 (API 호출 제한 고려)
+    async def check_youtube_channels(self):
+        await self.bot.wait_until_ready() # 봇 준비될 때까지 대기
+
+        # 🚩 server_configs 테이블에서 유튜브 활동이 활성화된 모든 서버 정보 가져오기 (SQLite 사용)
+        conn = self.bot.get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT guild_id, youtube_activity_enabled, youtube_channel_ids_json, youtube_notification_channel_id FROM server_configs WHERE youtube_activity_enabled = 1")
+        active_youtube_configs = cursor.fetchall()
+        conn.close()
+
+        if not self.youtube_service:
+            print("❌ YouTube Data API 서비스가 없습니다. 유튜브 활동을 확인할 수 없습니다.")
+            return
+
+        for config in active_youtube_configs:
+            guild_id = config['guild_id']
+            youtube_channel_ids = json.loads(config['youtube_channel_ids_json'])
+            notification_channel_id = config['youtube_notification_channel_id']
+
+            if not notification_channel_id:
+                print(f"⚠️ 서버 {{guild_id}}: 유튜브 알림 채널이 설정되지 않았습니다.")
+                continue
+
+            notification_channel = self.bot.get_channel(int(notification_channel_id))
+            if not notification_channel:
+                print(f"⚠️ 서버 {{guild_id}}: 알림 채널을 찾을 수 없습니다. (ID: {{notification_channel_id}})")
+                continue
+
+            for yt_channel_id in youtube_channel_ids:
+                try:
+                    # 채널의 최신 비디오 정보 가져오기
+                    request = self.youtube_service.channels().list(
+                        part="contentDetails",
+                        id=yt_channel_id
+                    )
+                    response = request.execute()
+
+                    # 업로드 플레이리스트 ID 가져오기
+                    uploads_playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
+
+                    playlist_request = self.youtube_service.playlistItems().list(
+                        part="snippet",
+                        playlistId=uploads_playlist_id,
+                        maxResults=1 # 최신 비디오 1개만 가져옴
+                    )
+                    playlist_response = playlist_request.execute()
+
+                    if not playlist_response['items']:
+                        continue # 비디오가 없는 채널
+
+                    latest_video = playlist_response['items'][0]['snippet']
+                    video_id = latest_video['resourceId']['videoId']
+                    video_title = latest_video['title']
+                    publish_time_str = latest_video['publishedAt']
+
+                    # ISO 8601 문자열을 datetime 객체로 변환
+                    publish_time = datetime.datetime.fromisoformat(publish_time_str.replace('Z', '+00:00'))
+
+                    # 🚩 이 채널(yt_channel_id)의 마지막 확인 시간 가져오기
+                    last_published = self.last_checked.get(guild_id, {{}}).get(yt_channel_id)
+
+                    if last_published and publish_time <= last_published:
+                        continue # 이미 알림 보냈거나 더 오래된 비디오
+
+                    # 새 비디오 감지: 알림 보내기
+                    video_url = f"https://www.youtube.com/watch?v={{video_id}}"
+                    channel_title = latest_video['channelTitle']
+
+                    embed = discord.Embed(
+                        title=f"🎬 새로운 영상 업로드!",
+                        description=f"[{video_title}]({{video_url}})",
+                        color=discord.Color.red()
+                    )
+                    embed.set_author(name=channel_title, url=f"https://www.youtube.com/channel/{{yt_channel_id}}")
+                    embed.set_thumbnail(url=latest_video['thumbnails']['high']['url'])
+                    embed.set_footer(text=f"업로드됨: {publish_time.strftime('%Y년 %m월 %d일 %H시 %M분')}")
+
+                    await notification_channel.send(embed=embed)
+                    print(f"✅ 서버 {{guild_id}}: 유튜브 알림 전송 완료 - {{video_title}}")
+
+                    # 🚩 마지막 확인 시간 업데이트
+                    if guild_id not in self.last_checked:
+                        self.last_checked[guild_id] = {{}}
+                    self.last_checked[guild_id][yt_channel_id] = publish_time
+
+                except Exception as e:
+                    print(f"❌ 서버 {{guild_id}}, 유튜브 채널 {{yt_channel_id}} 확인 중 오류 발생: {{e}}")
+
+    @tasks.loop(minutes=10) # 🚩 10분마다 유튜브 채널 확인 (API 호출 제한 고려)
+    async def check_youtube_channels(self):
+        await self.bot.wait_until_ready() # 봇 준비될 때까지 대기
+
+        # 🚩 server_configs 테이블에서 유튜브 활동이 활성화된 모든 서버 정보 가져오기 (SQLite 사용)
+        conn = self.bot.get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT guild_id, youtube_activity_enabled, youtube_channel_ids_json, youtube_notification_channel_id FROM server_configs WHERE youtube_activity_enabled = 1")
+        active_youtube_configs = cursor.fetchall()
+        conn.close()
+
+        if not self.youtube_service:
+            print("❌ YouTube Data API 서비스가 없습니다. 유튜브 활동을 확인할 수 없습니다.")
+            return
+
+        for config in active_youtube_configs:
+            guild_id = config['guild_id']
+            youtube_channel_ids = json.loads(config['youtube_channel_ids_json'])
+            notification_channel_id = config['youtube_notification_channel_id']
+
+            if not notification_channel_id:
+                print(f"⚠️ 서버 {{guild_id}}: 유튜브 알림 채널이 설정되지 않았습니다.")
+                continue
+
+            notification_channel = self.bot.get_channel(int(notification_channel_id))
+            if not notification_channel:
+                print(f"⚠️ 서버 {{guild_id}}: 알림 채널을 찾을 수 없습니다. (ID: {{notification_channel_id}})")
+                continue
+
+            for yt_channel_id in youtube_channel_ids:
+                try:
+                    # 채널의 최신 비디오 정보 가져오기
+                    request = self.youtube_service.channels().list(
+                        part="contentDetails",
+                        id=yt_channel_id
+                    )
+                    response = request.execute()
+
+                    # 업로드 플레이리스트 ID 가져오기
+                    uploads_playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
+
+                    playlist_request = self.youtube_service.playlistItems().list(
+                        part="snippet",
+                        playlistId=uploads_playlist_id,
+                        maxResults=1 # 최신 비디오 1개만 가져옴
+                    )
+                    playlist_response = playlist_request.execute()
+
+                    if not playlist_response['items']:
+                        continue # 비디오가 없는 채널
+
+                    latest_video = playlist_response['items'][0]['snippet']
+                    video_id = latest_video['resourceId']['videoId']
+                    video_title = latest_video['title']
+                    publish_time_str = latest_video['publishedAt']
+
+                    # ISO 8601 문자열을 datetime 객체로 변환
+                    publish_time = datetime.datetime.fromisoformat(publish_time_str.replace('Z', '+00:00'))
+
+                    # 🚩 이 채널(yt_channel_id)의 마지막 확인 시간 가져오기
+                    last_published = self.last_checked.get(guild_id, {{}}).get(yt_channel_id)
+
+                    if last_published and publish_time <= last_published:
+                        continue # 이미 알림 보냈거나 더 오래된 비디오
+
+                    # 새 비디오 감지: 알림 보내기
+                    video_url = f"https://www.youtube.com/watch?v={{video_id}}"
+                    channel_title = latest_video['channelTitle']
+
+                    embed = discord.Embed(
+                        title=f"🎬 새로운 영상 업로드!",
+                        description=f"[{video_title}]({{video_url}})",
+                        color=discord.Color.red()
+                    )
+                    embed.set_author(name=channel_title, url=f"https://www.youtube.com/channel/{{yt_channel_id}}")
+                    embed.set_thumbnail(url=latest_video['thumbnails']['high']['url'])
+                    embed.set_footer(text=f"업로드됨: {publish_time.strftime('%Y년 %m월 %d일 %H시 %M분')}")
+
+                    await notification_channel.send(embed=embed)
+                    print(f"✅ 서버 {{guild_id}}: 유튜브 알림 전송 완료 - {{video_title}}")
+
+                    # 🚩 마지막 확인 시간 업데이트
+                    if guild_id not in self.last_checked:
+                        self.last_checked[guild_id] = {{}}
+                    self.last_checked[guild_id][yt_channel_id] = publish_time
+
+                except Exception as e:
+                    print(f"❌ 서버 {{guild_id}}, 유튜브 채널 {{yt_channel_id}} 확인 중 오류 발생: {{e}}")
+
+    @tasks.loop(minutes=10) # 🚩 10분마다 유튜브 채널 확인 (API 호출 제한 고려)
+    async def check_youtube_channels(self):
+        await self.bot.wait_until_ready() # 봇 준비될 때까지 대기
+
+        # 🚩 server_configs 테이블에서 유튜브 활동이 활성화된 모든 서버 정보 가져오기 (SQLite 사용)
+        conn = self.bot.get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT guild_id, youtube_activity_enabled, youtube_channel_ids_json, youtube_notification_channel_id FROM server_configs WHERE youtube_activity_enabled = 1")
+        active_youtube_configs = cursor.fetchall()
+        conn.close()
+
+        if not self.youtube_service:
+            print("❌ YouTube Data API 서비스가 없습니다. 유튜브 활동을 확인할 수 없습니다.")
+            return
+
+        for config in active_youtube_configs:
+            guild_id = config['guild_id']
+            youtube_channel_ids = json.loads(config['youtube_channel_ids_json'])
+            notification_channel_id = config['youtube_notification_channel_id']
+
+            if not notification_channel_id:
+                print(f"⚠️ 서버 {{guild_id}}: 유튜브 알림 채널이 설정되지 않았습니다.")
+                continue
+
+            notification_channel = self.bot.get_channel(int(notification_channel_id))
+            if not notification_channel:
+                print(f"⚠️ 서버 {{guild_id}}: 알림 채널을 찾을 수 없습니다. (ID: {{notification_channel_id}})")
+                continue
+
+            for yt_channel_id in youtube_channel_ids:
+                try:
+                    # 채널의 최신 비디오 정보 가져오기
+                    request = self.youtube_service.channels().list(
+                        part="contentDetails",
+                        id=yt_channel_id
+                    )
+                    response = request.execute()
+
+                    # 업로드 플레이리스트 ID 가져오기
+                    uploads_playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
+
+                    playlist_request = self.youtube_service.playlistItems().list(
+                        part="snippet",
+                        playlistId=uploads_playlist_id,
+                        maxResults=1 # 최신 비디오 1개만 가져옴
+                    )
+                    playlist_response = playlist_request.execute()
+
+                    if not playlist_response['items']:
+                        continue # 비디오가 없는 채널
+
+                    latest_video = playlist_response['items'][0]['snippet']
+                    video_id = latest_video['resourceId']['videoId']
+                    video_title = latest_video['title']
+                    publish_time_str = latest_video['publishedAt']
+
+                    # ISO 8601 문자열을 datetime 객체로 변환
+                    publish_time = datetime.datetime.fromisoformat(publish_time_str.replace('Z', '+00:00'))
+
+                    # 🚩 이 채널(yt_channel_id)의 마지막 확인 시간 가져오기
+                    last_published = self.last_checked.get(guild_id, {{}}).get(yt_channel_id)
+
+                    if last_published and publish_time <= last_published:
+                        continue # 이미 알림 보냈거나 더 오래된 비디오
+
+                    # 새 비디오 감지: 알림 보내기
+                    video_url = f"https://www.youtube.com/watch?v={{video_id}}"
+                    channel_title = latest_video['channelTitle']
+
+                    embed = discord.Embed(
+                        title=f"🎬 새로운 영상 업로드!",
+                        description=f"[{video_title}]({{video_url}})",
+                        color=discord.Color.red()
+                    )
+                    embed.set_author(name=channel_title, url=f"https://www.youtube.com/channel/{{yt_channel_id}}")
+                    embed.set_thumbnail(url=latest_video['thumbnails']['high']['url'])
+                    embed.set_footer(text=f"업로드됨: {publish_time.strftime('%Y년 %m월 %d일 %H시 %M분')}")
+
+                    await notification_channel.send(embed=embed)
+                    print(f"✅ 서버 {{guild_id}}: 유튜브 알림 전송 완료 - {{video_title}}")
+
+                    # 🚩 마지막 확인 시간 업데이트
+                    if guild_id not in self.last_checked:
+                        self.last_checked[guild_id] = {{}}
+                    self.last_checked[guild_id][yt_channel_id] = publish_time
+
+                except Exception as e:
+                    print(f"❌ 서버 {{guild_id}}, 유튜브 채널 {{yt_channel_id}} 확인 중 오류 발생: {{e}}")
+
+    @tasks.loop(minutes=10) # 🚩 10분마다 유튜브 채널 확인 (API 호출 제한 고려)
+    async def check_youtube_channels(self):
+        await self.bot.wait_until_ready() # 봇 준비될 때까지 대기
+
+        # 🚩 server_configs 테이블에서 유튜브 활동이 활성화된 모든 서버 정보 가져오기 (SQLite 사용)
+        conn = self.bot.get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT guild_id, youtube_activity_enabled, youtube_channel_ids_json, youtube_notification_channel_id FROM server_configs WHERE youtube_activity_enabled = 1")
+        active_youtube_configs = cursor.fetchall()
+        conn.close()
+
+        if not self.youtube_service:
+            print("❌ YouTube Data API 서비스가 없습니다. 유튜브 활동을 확인할 수 없습니다.")
+            return
+
+        for config in active_youtube_configs:
+            guild_id = config['guild_id']
+            youtube_channel_ids = json.loads(config['youtube_channel_ids_json'])
+            notification_channel_id = config['youtube_notification_channel_id']
+
+            if not notification_channel_id:
+                print(f"⚠️ 서버 {{guild_id}}: 유튜브 알림 채널이 설정되지 않았습니다.")
+                continue
+
+            notification_channel = self.bot.get_channel(int(notification_channel_id))
+            if not notification_channel:
+                print(f"⚠️ 서버 {{guild_id}}: 알림 채널을 찾을 수 없습니다. (ID: {{notification_channel_id}})")
+                continue
+
+            for yt_channel_id in youtube_channel_ids:
+                try:
+                    # 채널의 최신 비디오 정보 가져오기
+                    request = self.youtube_service.channels().list(
+                        part="contentDetails",
+                        id=yt_channel_id
+                    )
+                    response = request.execute()
+
+                    # 업로드 플레이리스트 ID 가져오기
+                    uploads_playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
+
+                    playlist_request = self.youtube_service.playlistItems().list(
+                        part="snippet",
+                        playlistId=uploads_playlist_id,
+                        maxResults=1 # 최신 비디오 1개만 가져옴
+                    )
+                    playlist_response = playlist_request.execute()
+
+                    if not playlist_response['items']:
+                        continue # 비디오가 없는 채널
+
+                    latest_video = playlist_response['items'][0]['snippet']
+                    video_id = latest_video['resourceId']['videoId']
+                    video_title = latest_video['title']
+                    publish_time_str = latest_video['publishedAt']
+
+                    # ISO 8601 문자열을 datetime 객체로 변환
+                    publish_time = datetime.datetime.fromisoformat(publish_time_str.replace('Z', '+00:00'))
+
+                    # 🚩 이 채널(yt_channel_id)의 마지막 확인 시간 가져오기
+                    last_published = self.last_checked.get(guild_id, {{}}).get(yt_channel_id)
+
+                    if last_published and publish_time <= last_published:
+                        continue # 이미 알림 보냈거나 더 오래된 비디오
+
+                    # 새 비디오 감지: 알림 보내기
+                    video_url = f"https://www.youtube.com/watch?v={{video_id}}"
+                    channel_title = latest_video['channelTitle']
+
+                    embed = discord.Embed(
+                        title=f"🎬 새로운 영상 업로드!",
+                        description=f"[{video_title}]({{video_url}})",
+                        color=discord.Color.red()
+                    )
+                    embed.set_author(name=channel_title, url=f"https://www.youtube.com/channel/{{yt_channel_id}}")
+                    embed.set_thumbnail(url=latest_video['thumbnails']['high']['url'])
+                    embed.set_footer(text=f"업로드됨: {publish_time.strftime('%Y년 %m월 %d일 %H시 %M분')}")
+
+                    await notification_channel.send(embed=embed)
+                    print(f"✅ 서버 {{guild_id}}: 유튜브 알림 전송 완료 - {{video_title}}")
+
+                    # 🚩 마지막 확인 시간 업데이트
+                    if guild_id not in self.last_checked:
+                        self.last_checked[guild_id] = {{}}
+                    self.last_checked[guild_id][yt_channel_id] = publish_time
+
+                except Exception as e:
+                    print(f"❌ 서버 {{guild_id}}, 유튜브 채널 {{yt_channel_id}} 확인 중 오류 발생: {{e}}")
+
+    @tasks.loop(minutes=10) # 🚩 10분마다 유튜브 채널 확인 (API 호출 제한 고려)
+    async def check_youtube_channels(self):
+        await self.bot.wait_until_ready() # 봇 준비될 때까지 대기
+
+        # 🚩 server_configs 테이블에서 유튜브 활동이 활성화된 모든 서버 정보 가져오기 (SQLite 사용)
+        conn = self.bot.get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT guild_id, youtube_activity_enabled, youtube_channel_ids_json, youtube_notification_channel_id FROM server_configs WHERE youtube_activity_enabled = 1")
+        active_youtube_configs = cursor.fetchall()
+        conn.close()
+
+        if not self.youtube_service:
+            print("❌ YouTube Data API 서비스가 없습니다. 유튜브 활동을 확인할 수 없습니다.")
+            return
+
+        for config in active_youtube_configs:
+            guild_id = config['guild_id']
+            youtube_channel_ids = json.loads(config['youtube_channel_ids_json'])
+            notification_channel_id = config['youtube_notification_channel_id']
+
+            if not notification_channel_id:
+                print(f"⚠️ 서버 {{guild_id}}: 유튜브 알림 채널이 설정되지 않았습니다.")
+                continue
+
+            notification_channel = self.bot.get_channel(int(notification_channel_id))
+            if not notification_channel:
+                print(f"⚠️ 서버 {{guild_id}}: 알림 채널을 찾을 수 없습니다. (ID: {{notification_channel_id}})")
+                continue
+
+            for yt_channel_id in youtube_channel_ids:
+                try:
+                    # 채널의 최신 비디오 정보 가져오기
+                    request = self.youtube_service.channels().list(
+                        part="contentDetails",
+                        id=yt_channel_id
+                    )
+                    response = request.execute()
+
+                    # 업로드 플레이리스트 ID 가져오기
+                    uploads_playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
+
+                    playlist_request = self.youtube_service.playlistItems().list(
+                        part="snippet",
+                        playlistId=uploads_playlist_id,
+                        maxResults=1 # 최신 비디오 1개만 가져옴
+                    )
+                    playlist_response = playlist_request.execute()
+
+                    if not playlist_response['items']:
+                        continue # 비디오가 없는 채널
+
+                    latest_video = playlist_response['items'][0]['snippet']
+                    video_id = latest_video['resourceId']['videoId']
+                    video_title = latest_video['title']
+                    publish_time_str = latest_video['publishedAt']
+
+                    # ISO 8601 문자열을 datetime 객체로 변환
+                    publish_time = datetime.datetime.fromisoformat(publish_time_str.replace('Z', '+00:00'))
+
+                    # 🚩 이 채널(yt_channel_id)의 마지막 확인 시간 가져오기
+                    last_published = self.last_checked.get(guild_id, {{}}).get(yt_channel_id)
+
+                    if last_published and publish_time <= last_published:
+                        continue # 이미 알림 보냈거나 더 오래된 비디오
+
+                    # 새 비디오 감지: 알림 보내기
+                    video_url = f"https://www.youtube.com/watch?v={{video_id}}"
+                    channel_title = latest_video['channelTitle']
+
+                    embed = discord.Embed(
+                        title=f"🎬 새로운 영상 업로드!",
+                        description=f"[{video_title}]({{video_url}})",
+                        color=discord.Color.red()
+                    )
+                    embed.set_author(name=channel_title, url=f"https://www.youtube.com/channel/{{yt_channel_id}}")
+                    embed.set_thumbnail(url=latest_video['thumbnails']['high']['url'])
+                    embed.set_footer(text=f"업로드됨: {publish_time.strftime('%Y년 %m월 %d일 %H시 %M분')}")
+
+                    await notification_channel.send(embed=embed)
+                    print(f"✅ 서버 {{guild_id}}: 유튜브 알림 전송 완료 - {{video_title}}")
+
+                    # 🚩 마지막 확인 시간 업데이트
+                    if guild_id not in self.last_checked:
+                        self.last_checked[guild_id] = {{}}
+                    self.last_checked[guild_id][yt_channel_id] = publish_time
+
+                except Exception as e:
+                    print(f"❌ 서버 {{guild_id}}, 유튜브 채널 {{yt_channel_id}} 확인 중 오류 발생: {{e}}")
+
+    @tasks.loop(minutes=10) # 🚩 10분마다 유튜브 채널 확인 (API 호출 제한 고려)
+    async def check_youtube_channels(self):
+        await self.bot.wait_until_ready() # 봇 준비될 때까지 대기
+
+        # 🚩 server_configs 테이블에서 유튜브 활동이 활성화된 모든 서버 정보 가져오기 (SQLite 사용)
+        conn = self.bot.get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT guild_id, youtube_activity_enabled, youtube_channel_ids_json, youtube_notification_channel_id FROM server_configs WHERE youtube_activity_enabled = 1")
+        active_youtube_configs = cursor.fetchall()
+        conn.close()
+
+        if not self.youtube_service:
+            print("❌ YouTube Data API 서비스가 없습니다. 유튜브 활동을 확인할 수 없습니다.")
+            return
+
+        for config in active_youtube_configs:
+            guild_id = config['guild_id']
+            youtube_channel_ids = json.loads(config['youtube_channel_ids_json'])
+            notification_channel_id = config['youtube_notification_channel_id']
+
+            if not notification_channel_id:
+                print(f"⚠️ 서버 {{guild_id}}: 유튜브 알림 채널이 설정되지 않았습니다.")
+                continue
+
+            notification_channel = self.bot.get_channel(int(notification_channel_id))
+            if not notification_channel:
+                print(f"⚠️ 서버 {{guild_id}}: 알림 채널을 찾을 수 없습니다. (ID: {{notification_channel_id}})")
+                continue
+
+            for yt_channel_id in youtube_channel_ids:
+                try:
+                    # 채널의 최신 비디오 정보 가져오기
+                    request = self.youtube_service.channels().list(
+                        part="contentDetails",
+                        id=yt_channel_id
+                    )
+                    response = request.execute()
+
+                    # 업로드 플레이리스트 ID 가져오기
+                    uploads_playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
+
+                    playlist_request = self.youtube_service.playlistItems().list(
+                        part="snippet",
+                        playlistId=uploads_playlist_id,
+                        maxResults=1 # 최신 비디오 1개만 가져옴
+                    )
+                    playlist_response = playlist_request.execute()
+
+                    if not playlist_response['items']:
+                        continue # 비디오가 없는 채널
+
+                    latest_video = playlist_response['items'][0]['snippet']
+                    video_id = latest_video['resourceId']['videoId']
+                    video_title = latest_video['title']
+                    publish_time_str = latest_video['publishedAt']
+
+                    # ISO 8601 문자열을 datetime 객체로 변환
+                    publish_time = datetime.datetime.fromisoformat(publish_time_str.replace('Z', '+00:00'))
+
+                    # 🚩 이 채널(yt_channel_id)의 마지막 확인 시간 가져오기
+                    last_published = self.last_checked.get(guild_id, {{}}).get(yt_channel_id)
+
+                    if last_published and publish_time <= last_published:
+                        continue # 이미 알림 보냈거나 더 오래된 비디오
+
+                    # 새 비디오 감지: 알림 보내기
+                    video_url = f"https://www.youtube.com/watch?v={{video_id}}"
+                    channel_title = latest_video['channelTitle']
+
+                    embed = discord.Embed(
+                        title=f"🎬 새로운 영상 업로드!",
+                        description=f"[{video_title}]({{video_url}})",
+                        color=discord.Color.red()
+                    )
+                    embed.set_author(name=channel_title, url=f"https://www.youtube.com/channel/{{yt_channel_id}}")
+                    embed.set_thumbnail(url=latest_video['thumbnails']['high']['url'])
+                    embed.set_footer(text=f"업로드됨: {publish_time.strftime('%Y년 %m월 %d일 %H시 %M분')}")
+
+                    await notification_channel.send(embed=embed)
+                    print(f"✅ 서버 {{guild_id}}: 유튜브 알림 전송 완료 - {{video_title}}")
+
+                    # 🚩 마지막 확인 시간 업데이트
+                    if guild_id not in self.last_checked:
+                        self.last_checked[guild_id] = {{}}
+                    self.last_checked[guild_id][yt_channel_id] = publish_time
+
+                except Exception as e:
+                    print(f"❌ 서버 {{guild_id}}, 유튜브 채널 {{yt_channel_id}} 확인 중 오류 발생: {{e}}")
+
+    @tasks.loop(minutes=10) # 🚩 10분마다 유튜브 채널 확인 (API 호출 제한 고려)
+    async def check_youtube_channels(self):
+        await self.bot.wait_until_ready() # 봇 준비될 때까지 대기
+
+        # 🚩 server_configs 테이블에서 유튜브 활동이 활성화된 모든 서버 정보 가져오기 (SQLite 사용)
+        conn = self.bot.get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT guild_id, youtube_activity_enabled, youtube_channel_ids_json, youtube_notification_channel_id FROM server_configs WHERE youtube_activity_enabled = 1")
+        active_youtube_configs = cursor.fetchall()
+        conn.close()
+
+        if not self.youtube_service:
+            print("❌ YouTube Data API 서비스가 없습니다. 유튜브 활동을 확인할 수 없습니다.")
+            return
+
+        for config in active_youtube_configs:
+            guild_id = config['guild_id']
+            youtube_channel_ids = json.loads(config['youtube_channel_ids_json'])
+            notification_channel_id = config['youtube_notification_channel_id']
+
+            if not notification_channel_id:
+                print(f"⚠️ 서버 {{guild_id}}: 유튜브 알림 채널이 설정되지 않았습니다.")
+                continue
+
+            notification_channel = self.bot.get_channel(int(notification_channel_id))
+            if not notification_channel:
+                print(f"⚠️ 서버 {{guild_id}}: 알림 채널을 찾을 수 없습니다. (ID: {{notification_channel_id}})")
+                continue
+
+            for yt_channel_id in youtube_channel_ids:
+                try:
+                    # 채널의 최신 비디오 정보 가져오기
+                    request = self.youtube_service.channels().list(
+                        part="contentDetails",
+                        id=yt_channel_id
+                    )
+                    response = request.execute()
+
+                    # 업로드 플레이리스트 ID 가져오기
+                    uploads_playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
+
+                    playlist_request = self.youtube_service.playlistItems().list(
+                        part="snippet",
+                        playlistId=uploads_playlist_id,
+                        maxResults=1 # 최신 비디오 1개만 가져옴
+                    )
+                    playlist_response = playlist_request.execute()
+
+                    if not playlist_response['items']:
+                        continue # 비디오가 없는 채널
+
+                    latest_video = playlist_response['items'][0]['snippet']
+                    video_id = latest_video['resourceId']['videoId']
+                    video_title = latest_video['title']
+                    publish_time_str = latest_video['publishedAt']
+
+                    # ISO 8601 문자열을 datetime 객체로 변환
+                    publish_time = datetime.datetime.fromisoformat(publish_time_str.replace('Z', '+00:00'))
+
+                    # 🚩 이 채널(yt_channel_id)의 마지막 확인 시간 가져오기
+                    last_published = self.last_checked.get(guild_id, {{}}).get(yt_channel_id)
+
+                    if last_published and publish_time <= last_published:
+                        continue # 이미 알림 보냈거나 더 오래된 비디오
+
+                    # 새 비디오 감지: 알림 보내기
+                    video_url = f"https://www.youtube.com/watch?v={{video_id}}"
+                    channel_title = latest_video['channelTitle']
+
+                    embed = discord.Embed(
+                        title=f"🎬 새로운 영상 업로드!",
+                        description=f"[{video_title}]({{video_url}})",
+                        color=discord.Color.red()
+                    )
+                    embed.set_author(name=channel_title, url=f"https://www.youtube.com/channel/{{yt_channel_id}}")
+                    embed.set_thumbnail(url=latest_video['thumbnails']['high']['url'])
+                    embed.set_footer(text=f"업로드됨: {publish_time.strftime('%Y년 %m월 %d일 %H시 %M분')}")
+
+                    await notification_channel.send(embed=embed)
+                    print(f"✅ 서버 {{guild_id}}: 유튜브 알림 전송 완료 - {{video_title}}")
+
+                    # 🚩 마지막 확인 시간 업데이트
+                    if guild_id not in self.last_checked:
+                        self.last_checked[guild_id] = {{}}
+                    self.last_checked[guild_id][yt_channel_id] = publish_time
+
+                except Exception as e:
+                    print(f"❌ 서버 {{guild_id}}, 유튜브 채널 {{yt_channel_id}} 확인 중 오류 발생: {{e}}")
+
+    @tasks.loop(minutes=10) # 🚩 10분마다 유튜브 채널 확인 (API 호출 제한 고려)
+    async def check_youtube_channels(self):
+        await self.bot.wait_until_ready() # 봇 준비될 때까지 대기
+
+        # 🚩 server_configs 테이블에서 유튜브 활동이 활성화된 모든 서버 정보 가져오기 (SQLite 사용)
+        conn = self.bot.get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT guild_id, youtube_activity_enabled, youtube_channel_ids_json, youtube_notification_channel_id FROM server_configs WHERE youtube_activity_enabled = 1")
+        active_youtube_configs = cursor.fetchall()
+        conn.close()
+
+        if not self.youtube_service:
+            print("❌ YouTube Data API 서비스가 없습니다. 유튜브 활동을 확인할 수 없습니다.")
+            return
+
+        for config in active_youtube_configs:
+            guild_id = config['guild_id']
+            youtube_channel_ids = json.loads(config['youtube_channel_ids_json'])
+            notification_channel_id = config['youtube_notification_channel_id']
+
+            if not notification_channel_id:
+                print(f"⚠️ 서버 {{guild_id}}: 유튜브 알림 채널이 설정되지 않았습니다.")
+                continue
+
+            notification_channel = self.bot.get_channel(int(notification_channel_id))
+            if not notification_channel:
+                print(f"⚠️ 서버 {{guild_id}}: 알림 채널을 찾을 수 없습니다. (ID: {{notification_channel_id}})")
+                continue
+
+            for yt_channel_id in youtube_channel_ids:
+                try:
+                    # 채널의 최신 비디오 정보 가져오기
+                    request = self.youtube_service.channels().list(
+                        part="contentDetails",
+                        id=yt_channel_id
+                    )
+                    response = request.execute()
+
+                    # 업로드 플레이리스트 ID 가져오기
+                    uploads_playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
+
+                    playlist_request = self.youtube_service.playlistItems().list(
+                        part="snippet",
+                        playlistId=uploads_playlist_id,
+                        maxResults=1 # 최신 비디오 1개만 가져옴
+                    )
+                    playlist_response = playlist_request.execute()
+
+                    if not playlist_response['items']:
+                        continue # 비디오가 없는 채널
+
+                    latest_video = playlist_response['items'][0]['snippet']
+                    video_id = latest_video['resourceId']['videoId']
+                    video_title = latest_video['title']
+                    publish_time_str = latest_video['publishedAt']
+
+                    # ISO 8601 문자열을 datetime 객체로 변환
+                    publish_time = datetime.datetime.fromisoformat(publish_time_str.replace('Z', '+00:00'))
+
+                    # 🚩 이 채널(yt_channel_id)의 마지막 확인 시간 가져오기
+                    last_published = self.last_checked.get(guild_id, {{}}).get(yt_channel_id)
+
+                    if last_published and publish_time <= last_published:
+                        continue # 이미 알림 보냈거나 더 오래된 비디오
+
+                    # 새 비디오 감지: 알림 보내기
+                    video_url = f"https://www.youtube.com/watch?v={{video_id}}"
+                    channel_title = latest_video['channelTitle']
+
+                    embed = discord.Embed(
+                        title=f"🎬 새로운 영상 업로드!",
+                        description=f"[{video_title}]({{video_url}})",
+                        color=discord.Color.red()
+                    )
+                    embed.set_author(name=channel_title, url=f"https://www.youtube.com/channel/{{yt_channel_id}}")
+                    embed.set_thumbnail(url=latest_video['thumbnails']['high']['url'])
+                    embed.set_footer(text=f"업로드됨: {publish_time.strftime('%Y년 %m월 %d일 %H시 %M분')}")
+
+                    await notification_channel.send(embed=embed)
+                    print(f"✅ 서버 {{guild_id}}: 유튜브 알림 전송 완료 - {{video_title}}")
+
+                    # 🚩 마지막 확인 시간 업데이트
+                    if guild_id not in self.last_checked:
+                        self.last_checked[guild_id] = {{}}
+                    self.last_checked[guild_id][yt_channel_id] = publish_time
+
+                except Exception as e:
+                    print(f"❌ 서버 {{guild_id}}, 유튜브 채널 {{yt_channel_id}} 확인 중 오류 발생: {{e}}")
+
+    @tasks.loop(minutes=10) # 🚩 10분마다 유튜브 채널 확인 (API 호출 제한 고려)
+    async def check_youtube_channels(self):
+        await self.bot.wait_until_ready() # 봇 준비될 때까지 대기
+
+        # 🚩 server_configs 테이블에서 유튜브 활동이 활성화된 모든 서버 정보 가져오기 (SQLite 사용)
+        conn = self.bot.get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT guild_id, youtube_activity_enabled, youtube_channel_ids_json, youtube_notification_channel_id FROM server_configs WHERE youtube_activity_enabled = 1")
+        active_youtube_configs = cursor.fetchall()
+        conn.close()
+
+        if not self.youtube_service:
+            print("❌ YouTube Data API 서비스가 없습니다. 유튜브 활동을 확인할 수 없습니다.")
+            return
+
+        for config in active_youtube_configs:
+            guild_id = config['guild_id']
+            youtube_channel_ids = json.loads(config['youtube_channel_ids_json'])
+            notification_channel_id = config['youtube_notification_channel_id']
+
+            if not notification_channel_id:
+                print(f"⚠️ 서버 {{guild_id}}: 유튜브 알림 채널이 설정되지 않았습니다.")
+                continue
+
+            notification_channel = self.bot.get_channel(int(notification_channel_id))
+            if not notification_channel:
+                print(f"⚠️ 서버 {{guild_id}}: 알림 채널을 찾을 수 없습니다. (ID: {{notification_channel_id}})")
+                continue
+
+            for yt_channel_id in youtube_channel_ids:
+                try:
+                    # 채널의 최신 비디오 정보 가져오기
+                    request = self.youtube_service.channels().list(
+                        part="contentDetails",
+                        id=yt_channel_id
+                    )
+            

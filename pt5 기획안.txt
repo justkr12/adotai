@@ -1,0 +1,48 @@
+opendiscordbot_generator.py (최종 5/5 부분) 상세 요약 및 기능 설명 (텍스트)
+이 부분은 opendiscordbot_generator.py 라는 프로젝트 생성기 스크립트의 마지막 내용이며, 사용자가 특정 버전의 봇 프로젝트를 선택했을 때, 실제로 그 안에 생성될 파일들의 상세 내용과, 그 파일들을 사용하는 방법에 대한 설명을 담고 있습니다.
+
+이 5/5 부분의 코드는 다음 파일들의 텍스트 템플릿으로 구성되어 있습니다:
+
+email_support_bot.py (이메일 봇 스크립트 템플릿)
+
+역할: 이메일 봇의 핵심 로직을 정의합니다. (파이썬 기반)
+기능: dotenv를 사용하여 .env 파일에서 이메일 계정 정보(주소, 비밀번호, IMAP/SMTP 서버)를 가져옵니다.
+imaplib를 사용해 메일함을 모니터링하여 새 이메일(문의)을 감지합니다.
+email 모듈로 이메일 내용을 파싱하고, 발신자, 제목, 본문 등을 추출합니다.
+자동으로 6자리 문의 ID를 생성합니다.
+API 연동: requests 라이브러리를 사용하여 감지된 문의 내용을 Flask API 서버의 /api/inquiries 엔드포인트로 POST 요청을 보냅니다. 이때 .env에 설정된 BOT_API_KEY로 인증합니다.
+자동 회신: 문의가 성공적으로 API 서버에 전송되면, smtplib를 사용하여 발신자에게 문의 접수 ID와 함께 자동 회신 이메일을 보냅니다. 이때 이메일 본문은 {봇 이름}과 같은 플레이스홀더를 사용하여 사용자 정의된 메시지로 구성됩니다.
+주기성: time.sleep(60)을 사용하여 60초마다 메일함을 확인하도록 설정되어 있습니다.
+node_bot/index.js (Node.js 봇 메인 스크립트 템플릿)
+
+역할: Node.js 기반 Discord 봇의 메인 진입점 역할을 합니다.
+기능: discord.js 라이브러리를 사용하여 Discord API와 상호작용합니다.
+dotenv를 사용하여 .env 파일에서 봇 토큰 등을 로드합니다.
+기본적인 봇 이벤트(봇 준비 완료 client.once('ready'), 상호작용 client.on('interactionCreate'), 메시지 생성 client.on('messageCreate'))를 처리하는 구조를 포함합니다.
+슬래시 커맨드 핸들링을 위해 commands 폴더를 읽어와 등록하는 로직이 있습니다.
+기본적인 상태(예: PLAYING)를 설정합니다.
+node_bot/commands/ping.js (Node.js 봇 명령어 예시 템플릿)
+
+역할: Node.js 봇의 /ping-node 슬래시 커맨드를 정의하는 예시 파일입니다.
+기능: /ping-node 입력 시 "Pong from Node.js!"를 응답합니다.
+node_bot/package.json (Node.js 봇 프로젝트 의존성 관리 템플릿)
+
+역할: Node.js 프로젝트의 메타데이터와 의존성 라이브러리 목록을 정의합니다.
+기능: discord.js, dotenv 등의 봇 구동에 필요한 라이브러리와 pkg 같은 빌드 도구를 위한 devDependencies를 명시합니다. start, deploy-commands와 같은 npm 스크립트도 포함합니다.
+node_bot/deploy-commands.js (Node.js 봇 슬래시 커맨드 배포 스크립트 템플릿)
+
+역할: node_bot 폴더 내에 정의된 슬래시 커맨드들을 Discord API에 배포하는 스크립트입니다.
+기능: dotenv로 .env 파일을 로드하여 BOT_TOKEN, CLIENT_ID, IS_PURE_BOT_MODE, TARGET_GUILD_ID 등의 환경 변수를 사용합니다.
+discord.js의 REST 및 Routes 모듈을 사용하여 Discord API로 커맨드 데이터를 PUT합니다.
+IS_PURE_BOT_MODE와 TARGET_GUILD_ID 값에 따라 글로벌 커맨드로 배포하거나 특정 길드에만 커맨드를 배포하도록 조건부 로직이 포함되어 있습니다.
+README.md 템플릿:
+
+역할: 생성된 프로젝트의 최상위에 놓일 README 파일로, 봇의 전체 개요, 버전별 특징, 설정 및 실행 방법, 그리고 고급 사용자(실행 파일 빌드)를 위한 가이드까지 모두 담습니다.
+기능:
+프로젝트 소개: "가짜 봇이 아닌, 커스터마이징 가능한 오픈소스"라는 프로젝트의 핵심 철학을 강조합니다.
+버전별 특징: 각 Version 1부터 4까지의 주요 기능과 API 연동 여부, 대시보드 유무, 이메일 봇 유무 등을 명확히 설명합니다.
+Python/Node.js 설정: 각 런타임별로 필요한 .env 설정(API 키, 봇 ID 등)과 의존성 설치, 봇 실행 명령어를 상세히 안내합니다.
+GitHub Pages 배포 가이드: 생성기 스크립트(.py)를 GitHub에 올리고 Pages를 활성화하여 웹에서 바로 다운로드하거나 git clone할 수 있는 방법을 설명합니다. opendiscordbot.infy.uk 같은 커스텀 도메인 연결 방법도 포함합니다.
+실행 파일 빌드 가이드: PyInstaller (Python용 .exe, .app, Linux 실행 파일)와 pkg (Node.js용 .exe, .app, Linux 실행 파일)를 사용하여 생성기를 실행 파일로 만드는 명령어를 각 OS별로 상세히 제공합니다.
+필수 런타임 다운로드 링크: Python 3.12.5 및 Node.js 20 LTS의 공식 다운로드 페이지 링크를 포함합니다. 실행기가 런타임을 자동 설치하지 않으므로, 사용자가 직접 설치하도록 안내합니다.
+이 생성기 스크립트는 이제 모든 준비를 마쳤습니다,
